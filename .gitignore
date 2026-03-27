@@ -1,0 +1,5 @@
+# Facebook session data — NEVER commit this
+fb-session/
+
+# Crawled data (large JSON files)
+crawled-data/
