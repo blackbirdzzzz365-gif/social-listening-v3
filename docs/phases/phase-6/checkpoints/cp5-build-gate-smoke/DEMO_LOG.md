@@ -1,0 +1,21 @@
+# Phase 6 Demo Log
+
+- Timestamp: 2026-03-30T15:39:58+0700
+- Frontend build command: `cd frontend && npm run build`
+- Frontend build result: PASS
+- Compose rebuild command: `docker compose up -d --build app`
+- Compose rebuild result: PASS
+- Container status: `healthy`
+- App health response: `{"status":"ok","version":"0.1.0"}`
+- App root verification:
+  - `http://127.0.0.1:8000/` serves the refreshed frontend bundle (`index-DHcWTBea.js`, `index-bjpGm8Ch.css`)
+- Browser root verification:
+  - `http://127.0.0.1:6080/` serves the custom `Social Listening Browser` entry page
+  - browser root no longer falls back to the raw noVNC directory listing after the updated compose rebuild
+- Mobile noVNC verification:
+  - `http://127.0.0.1:6080/mobile.html?autoconnect=1` is reachable
+  - `mobile.html` injects `mobile-vnc.css` and `mobile-vnc.js`
+  - `defaults.json` serves `resize=scale`, `reconnect=true`, and `path=websockify`
+- Runtime notes:
+  - Upstream `vnc.html` and `vnc_lite.html` remain available as fallbacks
+  - Docker build logs still show a non-blocking `camoufox` SSL warning while attempting to fetch the UBO add-on

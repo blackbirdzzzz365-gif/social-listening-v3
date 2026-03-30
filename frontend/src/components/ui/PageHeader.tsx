@@ -8,13 +8,15 @@ type PageHeaderProps = {
 
 export function PageHeader({ eyebrow, title, description }: PageHeaderProps) {
   return (
-    <Stack gap={4}>
+    <Stack className="sl-page-header" gap={4}>
       <Text c="dimmed" fw={700} size="xs" style={{ letterSpacing: "0.1em" }} tt="uppercase">
         {eyebrow}
       </Text>
-      <Title order={3}>{title}</Title>
+      <Title order={3} style={{ overflowWrap: "anywhere" }}>
+        {title}
+      </Title>
       {description ? (
-        <Text c="dimmed" size="sm">
+        <Text c="dimmed" className="sl-page-header__description" size="sm">
           {description}
         </Text>
       ) : null}

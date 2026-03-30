@@ -1,0 +1,25 @@
+{
+  "cp": "cp4-mobile-novnc-customization",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-03-30T15:39:58+0700",
+  "summary": "The running container serves a custom browser root, mobile noVNC defaults, and an injected mobile control layer on `mobile.html`.",
+  "checks": [
+    {
+      "name": "CHECK-01: Mobile noVNC defaults are served",
+      "command": "curl -sS http://127.0.0.1:6080/defaults.json",
+      "expected": "defaults.json exposes scaled resize, reconnect, and websockify path defaults",
+      "actual": "defaults.json returns resize=scale, reconnect=true, reconnect_delay=2500, show_dot=true, and path=websockify.",
+      "passed": true
+    },
+    {
+      "name": "CHECK-02: mobile.html exists and includes the mobile overlay assets",
+      "command": "curl -sS 'http://127.0.0.1:6080/mobile.html?autoconnect=1' | rg -n 'mobile-vnc.css|mobile-vnc.js|Social Listening Browser'",
+      "expected": "mobile.html is available and injects the project-owned CSS/JS overlay",
+      "actual": "mobile.html is served successfully and includes `mobile-vnc.css`, `mobile-vnc.js`, and the overridden browser title.",
+      "passed": true
+    }
+  ],
+  "issues": [],
+  "ready_for_next_cp": true
+}

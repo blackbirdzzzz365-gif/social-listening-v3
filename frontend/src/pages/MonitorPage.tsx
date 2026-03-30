@@ -292,7 +292,9 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
               </Paper>
             ))}
             <Paper p="sm" radius="md" withBorder>
-              <Code block>{events.join("\n") || "No events yet."}</Code>
+              <Code block className="sl-code-block">
+                {events.join("\n") || "No events yet."}
+              </Code>
             </Paper>
           </Stack>
         ) : null}

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Social Listening Browser</title>
+    <link rel="stylesheet" href="browser.css" />
+  </head>
+  <body class="sl-browser-entry">
+    <main class="sl-browser-entry__shell">
+      <section class="sl-browser-entry__hero">
+        <p class="sl-browser-entry__eyebrow">Remote Browser</p>
+        <h1>Manual Facebook login, but with a mobile-friendly browser surface.</h1>
+        <p class="sl-browser-entry__lede">
+          Open the mobile browser view by default. If something looks off, fall back to the upstream noVNC pages below.
+        </p>
+      </section>
+
+      <section class="sl-browser-entry__panel">
+        <div class="sl-browser-entry__grid">
+          <a class="sl-browser-entry__primary" href="/mobile.html?autoconnect=1">
+            Open Mobile Browser
+          </a>
+          <a class="sl-browser-entry__secondary" href="/vnc.html?autoconnect=1">
+            Open Full noVNC
+          </a>
+          <a class="sl-browser-entry__secondary" href="/vnc_lite.html?scale=true">
+            Open Lite noVNC
+          </a>
+          <a class="sl-browser-entry__secondary" href="/">
+            Refresh Browser Home
+          </a>
+        </div>
+      </section>
+
+      <section class="sl-browser-entry__panel">
+        <h2>Mobile tips</h2>
+        <ul class="sl-browser-entry__tips">
+          <li>Use <strong>Open Mobile Browser</strong> for the best touch layout.</li>
+          <li>Tap <strong>Menu</strong> if you need the full noVNC control bar.</li>
+          <li>Tap <strong>Keyboard</strong> if you need to type into the remote browser.</li>
+          <li>Use <strong>Full</strong> to maximize the canvas after the session connects.</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

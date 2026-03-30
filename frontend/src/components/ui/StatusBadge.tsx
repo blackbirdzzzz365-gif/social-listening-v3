@@ -19,6 +19,7 @@ export function StatusBadge({
   return (
     <Badge
       color={color}
+      style={{ maxWidth: "100%", whiteSpace: "normal" }}
       leftSection={
         withDot ? (
           <Box

@@ -1,0 +1,115 @@
+:root.sl-mobile-vnc {
+  --sl-mobile-bar-height: 5.25rem;
+}
+
+html.sl-mobile-vnc {
+  background: #081420;
+}
+
+html.sl-mobile-vnc body {
+  background: radial-gradient(circle at top, rgba(61, 95, 125, 0.35), transparent 36%), #081420;
+  padding-bottom: calc(var(--sl-mobile-bar-height) + env(safe-area-inset-bottom, 0px));
+}
+
+html.sl-mobile-vnc .noVNC_logo {
+  display: none;
+}
+
+html.sl-mobile-vnc #noVNC_control_bar_anchor {
+  top: auto;
+  bottom: calc(var(--sl-mobile-bar-height) + 0.5rem);
+  right: 0.5rem;
+}
+
+html.sl-mobile-vnc #noVNC_control_bar {
+  border-radius: 1rem;
+}
+
+html.sl-mobile-vnc #noVNC_control_bar > .noVNC_scroll {
+  max-height: min(60vh, 28rem);
+  padding: 0.5rem;
+}
+
+html.sl-mobile-vnc #noVNC_control_bar > .noVNC_scroll > * {
+  margin: 0.45rem auto;
+}
+
+html.sl-mobile-vnc #noVNC_control_bar .noVNC_button {
+  min-height: 2.75rem;
+  min-width: 2.75rem;
+}
+
+#sl-mobile-vnc-quickbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 120;
+  padding: 0.6rem 0.7rem calc(0.7rem + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(180deg, rgba(8, 20, 32, 0.2), rgba(8, 20, 32, 0.95));
+  backdrop-filter: blur(10px);
+}
+
+.sl-mobile-vnc-quickbar__inner {
+  width: min(42rem, 100%);
+  margin: 0 auto;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.sl-mobile-vnc-quickbar__status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  background: rgba(12, 27, 41, 0.86);
+  color: #f3f7fa;
+  font: 600 0.82rem/1.2 Inter, "Segoe UI", sans-serif;
+  padding: 0.65rem 0.9rem;
+}
+
+.sl-mobile-vnc-quickbar__hint {
+  color: rgba(232, 240, 247, 0.78);
+  font-weight: 500;
+  font-size: 0.78rem;
+}
+
+.sl-mobile-vnc-quickbar__actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.sl-mobile-vnc-quickbar__button {
+  appearance: none;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 1rem;
+  min-height: 3.1rem;
+  padding: 0.65rem 0.5rem;
+  background: rgba(12, 27, 41, 0.92);
+  color: #f8fbfd;
+  font: 700 0.8rem/1.15 Inter, "Segoe UI", sans-serif;
+}
+
+.sl-mobile-vnc-quickbar__button:active {
+  transform: translateY(1px);
+}
+
+@media (min-width: 48rem) {
+  html.sl-mobile-vnc #noVNC_control_bar_anchor {
+    bottom: 1rem;
+    right: 1rem;
+  }
+
+  #sl-mobile-vnc-quickbar {
+    left: auto;
+    right: 1rem;
+    bottom: 1rem;
+    width: min(22rem, calc(100vw - 2rem));
+    padding: 0;
+    background: transparent;
+    backdrop-filter: none;
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "cp": "cp5-build-gate-smoke",
+  "role": "implementer",
+  "status": "READY",
+  "timestamp": "2026-03-30T15:39:58+0700",
+  "summary": "Phase 6 now passes the frontend build gate, the Docker image builds successfully, and local container smoke confirms the responsive app and browser surfaces are being served from the new runtime wiring.",
+  "artifacts": [
+    {
+      "file": "Dockerfile",
+      "action": "modified"
+    },
+    {
+      "file": "entrypoint.sh",
+      "action": "modified"
+    },
+    {
+      "file": "frontend/package-lock.json",
+      "action": "modified"
+    },
+    {
+      "file": "docs/phases/phase-6/checkpoints/cp5-build-gate-smoke/DEMO_LOG.md",
+      "action": "created"
+    }
+  ],
+  "issues": [],
+  "notes": "Docker build logs still show a non-blocking camoufox warning when fetching the UBO add-on over SSL, but the image and runtime both complete successfully."
+}

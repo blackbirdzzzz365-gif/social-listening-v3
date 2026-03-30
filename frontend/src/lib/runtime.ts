@@ -52,3 +52,22 @@ export function readHashRoute(hash = window.location.hash): AppRoute {
   }
   return { name: "home" };
 }
+
+export function getBrowserSurfaceUrl(path = "/"): string {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const { protocol, hostname, port } = window.location;
+
+  if (hostname === "localhost" || hostname === "127.0.0.1") {
+    return `${protocol}//${hostname}:6080${normalizedPath}`;
+  }
+
+  if (hostname.startsWith("social-listening-v3.")) {
+    return `${protocol}//${hostname.replace(/^social-listening-v3\./, "live-browser.")}${normalizedPath}`;
+  }
+
+  if (port === "8000") {
+    return `${protocol}//${hostname}:6080${normalizedPath}`;
+  }
+
+  return `${protocol}//${hostname}${normalizedPath}`;
+}

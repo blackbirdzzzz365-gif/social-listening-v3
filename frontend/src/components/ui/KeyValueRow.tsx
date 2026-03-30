@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Group, Text } from "@mantine/core";
+import { Box, Text } from "@mantine/core";
 
 type KeyValueRowProps = {
   label: string;
@@ -9,13 +9,18 @@ type KeyValueRowProps = {
 
 export function KeyValueRow({ label, value, mono = false }: KeyValueRowProps) {
   return (
-    <Group gap="xs" wrap="wrap">
-      <Text c="dimmed" size="sm">
+    <Box className="sl-key-value-row">
+      <Text c="dimmed" fw={600} size="sm">
         {label}:
       </Text>
-      <Text ff={mono ? "monospace" : undefined} size="sm">
+      <Box
+        className="sl-key-value-value"
+        style={{
+          fontFamily: mono ? "var(--mantine-font-family-monospace)" : undefined,
+        }}
+      >
         {value}
-      </Text>
-    </Group>
+      </Box>
+    </Box>
   );
 }
