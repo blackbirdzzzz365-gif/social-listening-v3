@@ -13,6 +13,7 @@ class ProductContext(Base):
     topic: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     keyword_json: Mapped[str | None] = mapped_column(Text)
+    retrieval_profile_json: Mapped[str | None] = mapped_column(Text)
     clarifying_question_json: Mapped[str | None] = mapped_column(Text)
     clarification_history_json: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(

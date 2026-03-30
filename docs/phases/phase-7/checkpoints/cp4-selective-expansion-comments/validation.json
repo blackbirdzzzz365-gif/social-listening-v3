@@ -1,0 +1,11 @@
+{
+  "cp": "cp4-selective-expansion-comments",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "",
+  "summary": "",
+  "checks": [],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp5-clean-payload-ai-guardrail"
+}

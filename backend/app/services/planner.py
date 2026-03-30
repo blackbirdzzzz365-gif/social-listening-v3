@@ -15,6 +15,7 @@ from app.infrastructure.database import SessionLocal
 from app.models.approval import ApprovalGrant
 from app.models.plan import Plan, PlanStep
 from app.models.product_context import ProductContext
+from app.services.retrieval_quality import RetrievalProfileBuilder
 
 
 def slugify(value: str) -> str:
@@ -39,6 +40,7 @@ class KeywordAnalysisResult:
     status: str
     clarifying_questions: list[str] | None
     keywords: dict[str, list[str]] | None
+    retrieval_profile: dict[str, object] | None
     clarification_history: list[dict[str, str]]
 
 
@@ -46,6 +48,7 @@ class PlannerService:
     def __init__(self, ai_client: AIClient, settings: Settings) -> None:
         self._ai_client = ai_client
         self._settings = settings
+        self._retrieval_profile_builder = RetrievalProfileBuilder()
 
     async def analyze_topic(self, topic: str, prompt: str) -> KeywordAnalysisResult:
         response = await self._ai_client.call(
@@ -56,12 +59,14 @@ class PlannerService:
         )
         context_id = f"{slugify(topic)}-{uuid4().hex[:8]}"
         clarifying_questions = response.get("clarifying_questions") or None
+        retrieval_profile = self._build_retrieval_profile(topic, response.get("keywords"))
         with SessionLocal() as session:
             context = ProductContext(
                 context_id=context_id,
                 topic=topic,
                 status=response["status"],
                 keyword_json=json.dumps(response["keywords"]) if response.get("keywords") else None,
+                retrieval_profile_json=json.dumps(retrieval_profile) if retrieval_profile else None,
                 clarifying_question_json=json.dumps(clarifying_questions) if clarifying_questions else None,
                 clarification_history_json=json.dumps([]),
             )
@@ -73,6 +78,7 @@ class PlannerService:
             status=response["status"],
             clarifying_questions=clarifying_questions,
             keywords=response.get("keywords"),
+            retrieval_profile=retrieval_profile,
             clarification_history=[],
         )
 
@@ -94,10 +100,12 @@ class PlannerService:
                     thinking=self._settings.keyword_analysis_thinking,
                 )
                 clarifying_questions = response.get("clarifying_questions") or None
+                retrieval_profile = self._build_retrieval_profile(context.topic, response.get("keywords"))
                 context.clarifying_question_json = (
                     json.dumps(clarifying_questions) if clarifying_questions else None
                 )
                 context.keyword_json = json.dumps(response["keywords"]) if response.get("keywords") else None
+                context.retrieval_profile_json = json.dumps(retrieval_profile) if retrieval_profile else None
                 context.status = response["status"]
                 session.add(context)
                 session.commit()
@@ -141,12 +149,14 @@ class PlannerService:
         )
 
         clarifying_questions = response.get("clarifying_questions") or None
+        retrieval_profile = self._build_retrieval_profile(topic, response.get("keywords"))
         with SessionLocal() as session:
             context = session.get(ProductContext, context_id)
             if context is None:
                 raise ValueError("context not found")
             context.status = response["status"]
             context.keyword_json = json.dumps(response["keywords"]) if response.get("keywords") else None
+            context.retrieval_profile_json = json.dumps(retrieval_profile) if retrieval_profile else None
             context.clarifying_question_json = json.dumps(clarifying_questions) if clarifying_questions else None
             context.clarification_history_json = json.dumps(merged_history)
             session.add(context)
@@ -160,7 +170,9 @@ class PlannerService:
             context = session.get(ProductContext, context_id)
             if context is None:
                 raise ValueError("context not found")
+            retrieval_profile = self._build_retrieval_profile(context.topic, keywords)
             context.keyword_json = json.dumps(keywords)
+            context.retrieval_profile_json = json.dumps(retrieval_profile)
             context.status = "keywords_ready"
             context.clarifying_question_json = None
             session.add(context)
@@ -177,11 +189,12 @@ class PlannerService:
             if context.status != "keywords_ready":
                 raise ValueError("keywords are not ready")
             keywords = json.loads(context.keyword_json or "{}")
+            retrieval_profile = json.loads(context.retrieval_profile_json or "{}")
 
         ai_response = await self._ai_client.call(
             model=self._settings.plan_generation_model,
             system_prompt=prompt,
-            user_input=json.dumps({"topic": context.topic, "keywords": keywords}),
+            user_input=json.dumps({"topic": context.topic, "keywords": keywords, "retrieval_profile": retrieval_profile}),
             thinking=self._settings.plan_generation_thinking,
         )
 
@@ -319,7 +332,12 @@ class PlannerService:
 
             estimated_count = raw_step.get("estimated_count")
             if estimated_count is None:
-                estimated_count = parameters.get("max_groups") or parameters.get("max_posts_per_group") or 10
+                if action_type == "SEARCH_GROUPS":
+                    estimated_count = parameters.get("max_groups") or 3
+                elif action_type in {"SEARCH_POSTS", "SEARCH_IN_GROUP", "CRAWL_FEED", "CRAWL_COMMENTS"}:
+                    estimated_count = parameters.get("max_posts_per_group") or 20
+                else:
+                    estimated_count = parameters.get("max_groups") or parameters.get("max_posts_per_group") or 10
 
             normalized_steps.append(
                 {
@@ -563,6 +581,7 @@ class PlannerService:
         status: str,
         clarifying_questions: list[str] | None,
         keywords: dict[str, list[str]] | None,
+        retrieval_profile: dict[str, object] | None,
         clarification_history: list[dict[str, str]],
     ) -> KeywordAnalysisResult:
         return KeywordAnalysisResult(
@@ -571,11 +590,13 @@ class PlannerService:
             status=status,
             clarifying_questions=clarifying_questions,
             keywords=keywords,
+            retrieval_profile=retrieval_profile,
             clarification_history=clarification_history,
         )
 
     def _result_from_context(self, context: ProductContext) -> KeywordAnalysisResult:
         keywords = json.loads(context.keyword_json) if context.keyword_json else None
+        retrieval_profile = json.loads(context.retrieval_profile_json) if context.retrieval_profile_json else None
         clarifying_questions = self._parse_json_list(context.clarifying_question_json) or None
         clarification_history = self._parse_history(context.clarification_history_json)
         return self._build_keyword_result(
@@ -584,8 +605,18 @@ class PlannerService:
             status=context.status,
             clarifying_questions=clarifying_questions,
             keywords=keywords,
+            retrieval_profile=retrieval_profile,
             clarification_history=clarification_history,
         )
+
+    def _build_retrieval_profile(
+        self,
+        topic: str,
+        keywords: dict[str, list[str]] | None,
+    ) -> dict[str, object] | None:
+        if not keywords:
+            return None
+        return self._retrieval_profile_builder.build(topic=topic, keyword_map=keywords)
 
     async def explain_steps(self, plan: dict, prompt: str) -> dict[str, str]:
         topic = ""

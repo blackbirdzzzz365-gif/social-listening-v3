@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field, field_validator
 
 from app.domain.action_registry import get_action_spec
@@ -32,6 +34,7 @@ class SessionResponse(BaseModel):
     status: str
     clarifying_questions: list[str] | None
     keywords: KeywordMap | None
+    retrieval_profile: dict[str, Any] | None = None
     clarification_history: list[ClarificationTurn] = Field(default_factory=list)
 
 

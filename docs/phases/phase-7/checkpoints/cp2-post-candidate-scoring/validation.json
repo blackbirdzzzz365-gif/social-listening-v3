@@ -1,0 +1,11 @@
+{
+  "cp": "cp2-post-candidate-scoring",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "",
+  "summary": "",
+  "checks": [],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp3-batch-health-gating"
+}

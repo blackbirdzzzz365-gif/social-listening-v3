@@ -5,7 +5,7 @@ from collections import Counter
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.infrastructure.config import Settings
 from app.infrastructure.database import SessionLocal
@@ -29,7 +29,10 @@ class LabelJobService:
             if run is None:
                 raise ValueError("run not found")
             total_records = session.scalar(
-                select(func.count()).select_from(CrawledPost).where(CrawledPost.run_id == run_id)
+                select(func.count()).select_from(CrawledPost).where(
+                    CrawledPost.run_id == run_id,
+                    self._eligible_condition(),
+                )
             ) or 0
             if total_records == 0:
                 raise ValueError("run has no crawled posts")
@@ -81,7 +84,10 @@ class LabelJobService:
             if run is None:
                 raise ValueError("run not found")
             total_records = session.scalar(
-                select(func.count()).select_from(CrawledPost).where(CrawledPost.run_id == run_id)
+                select(func.count()).select_from(CrawledPost).where(
+                    CrawledPost.run_id == run_id,
+                    self._eligible_condition(),
+                )
             ) or 0
             latest_job = session.scalars(
                 select(LabelJob).where(LabelJob.run_id == run_id).order_by(LabelJob.created_at.desc())
@@ -157,6 +163,14 @@ class LabelJobService:
             if len(samples) >= max(1, min(limit, 50)):
                 break
         return {"run_id": run_id, "label_filter": label_filter, "records": samples}
+
+    def _eligible_condition(self):
+        if self._settings.pre_ai_mode.lower() == "balanced":
+            return or_(
+                CrawledPost.pre_ai_status.is_(None),
+                CrawledPost.pre_ai_status.in_(("ACCEPTED", "UNCERTAIN")),
+            )
+        return or_(CrawledPost.pre_ai_status.is_(None), CrawledPost.pre_ai_status == "ACCEPTED")
 
     async def resume_incomplete_jobs(self) -> None:
         with SessionLocal() as session:

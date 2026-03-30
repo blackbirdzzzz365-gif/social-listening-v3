@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, Text
+from sqlalchemy import Boolean, CheckConstraint, Float, ForeignKey, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.domain.label_taxonomy import LABEL_RECORD_STATUSES, sql_enum
@@ -34,6 +34,18 @@ class CrawledPost(Base):
     posted_at: Mapped[str | None] = mapped_column(Text)
     reaction_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     comment_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    processing_stage: Mapped[str | None] = mapped_column(Text)
+    pre_ai_status: Mapped[str | None] = mapped_column(Text)
+    pre_ai_score: Mapped[float | None] = mapped_column(Float)
+    pre_ai_reason: Mapped[str | None] = mapped_column(Text)
+    score_breakdown_json: Mapped[str | None] = mapped_column(Text)
+    quality_flags_json: Mapped[str | None] = mapped_column(Text)
+    query_family: Mapped[str | None] = mapped_column(Text)
+    source_type: Mapped[str | None] = mapped_column(Text)
+    source_batch_index: Mapped[int | None] = mapped_column(Integer)
+    batch_decision: Mapped[str | None] = mapped_column(Text)
+    provider_used: Mapped[str | None] = mapped_column(Text)
+    fallback_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     label_status: Mapped[str] = mapped_column(Text, nullable=False, default="PENDING", server_default="PENDING")
     current_label_id: Mapped[str | None] = mapped_column(ForeignKey("content_labels.label_id"))
     is_excluded: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

@@ -1,0 +1,10 @@
+{
+  "cp": "cp7-phase7-smoke-audit",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "",
+  "summary": "",
+  "checks": [],
+  "issues": [],
+  "ready_for_next_cp": true
+}

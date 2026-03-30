@@ -1,393 +1,393 @@
-# Technical Solution — Phase 7
-## Retrieval Quality Gating Before AI Cost
+# Technical Solution - Phase 7
+## Solution Flow V2 For Phase 8 Delivery
 
-**Updated:** 2026-03-30  
-**Status:** Brainstorm solution draft
-
----
-
-## Locked Direction
-
-- Phase 7 uu tien giai bai toan retrieval quality truoc AI
-- Rule-based gate la lop default de quyet dinh record nao duoc di tiep
-- AI chi vao sau cho accepted band, hoac uncertain band neu mode cho phep
-- Comment scoring phai parent-aware
+**Status:** Locked architecture for implementation  
+**Updated:** 2026-03-31
 
 ---
 
-## Current-State Findings From Repo
+## 1. Technical Objective
 
-### 1. Query generation van don gian
+Implement a retrieval-to-analysis pipeline that:
 
-- Search query hien duoc planner normalize manh
-- query length va wording hien van thien ve 1 search string ngan
-- chua co retrieval profile da query theo intent
-
-### 2. Browser retrieval layer chua co relevance gate that su
-
-- `search_posts()`, `search_in_group()`, `crawl_feed()`, `crawl_comments()` chu yeu collect text + URL
-- chua co scoring theo:
-  - anchor relevance
-  - related context
-  - negative commercial patterns
-  - extraction quality
-
-### 3. Selective expansion chua duoc ap dung
-
-- comments co the duoc crawl tu discovered post refs ma chua qua quality gate
-- day la noi de tieu ton effort va AI cost nhat
-
-### 4. Accepted payload chua duoc clean rieng
-
-- text extraction hien tai de lan UI chrome va noisy fragments
-- label/theme services phai xu ly input khong deu chat
+- explores Facebook with more than one query/source path
+- stops weak paths early at the batch level
+- scores each post/comment deterministically before deep expansion
+- produces a cleaner accepted dataset for labeling and theme analysis
+- routes every AI call through one provider policy
 
 ---
 
-## Proposed Architecture
+## 2. Current-State Findings From The Repo
+
+### Retrieval and scoring
+
+- planner logic can normalize and generate topic-oriented text, but retrieval still behaves too much like one short search string
+- browser retrieval paths can collect posts/comments, but they do not yet enforce a pre-AI relevance gate
+- comment expansion is not yet strongly guarded by post quality
+
+### Persistence
+
+- `crawled_posts` already exists and is the fastest path for adding pre-AI state
+- there is no candidate-stage schema yet
+
+### AI routing
+
+- `AIClient` already centralizes provider access
+- current implementation prefers `chiasegpu` and only falls back on timeout
+- failover policy and telemetry need to be made explicit and broader
+
+---
+
+## 3. Locked Architecture
 
 ```text
 Topic + keyword map
         |
         v
-Retrieval Profile Builder
+RetrievalProfileBuilder
         |
         v
-Multi-source Retrieval
-  - SEARCH_POSTS
-  - SEARCH_GROUPS
-  - SEARCH_IN_GROUP
-  - CRAWL_FEED
+QueryExecutionPlanner
+  - query families
+  - source hints
+  - batch budget
         |
         v
-Candidate Store
+For each query/source path:
+  fetch top 20 posts
         |
         v
-Deterministic Relevance Engine
-  -> ACCEPTED
-  -> REJECTED
-  -> UNCERTAIN
-        |
-        +--> selective expansion (comments / more group crawl)
+Candidate persistence
         |
         v
-Clean Payload Builder
+DeterministicRelevanceEngine
+  - post-level scoring
         |
         v
-AI Labeling + Theme Analysis
+BatchHealthEvaluator
+  - continue / downgrade / stop path
+        |
+        +--> stop weak path
+        |
+        +--> continue healthy path
+        |
+        v
+SelectiveExpansionPolicy
+  - crawl comments only for allowed posts
+        |
+        v
+Comment candidate persistence
+        |
+        v
+ParentAwareCommentScorer
+        |
+        v
+CleanPayloadBuilder
+        |
+        v
+AIBudgetGuardrail
+        |
+        v
+AIClient
+  - primary: chiasegpu
+  - fallback: Claude
+        |
+        v
+Labeling + Theme Analysis
 ```
 
 ---
 
-## Module Proposal
+## 4. Solution Flow V2
 
-### 1. RetrievalProfileBuilder
+### Step 1 - Build retrieval profile
 
-Responsibility:
-
-- tao `query families`
-- tao `anchor term clusters`
-- tao `related term clusters`
-- tao `negative patterns`
-- tao `source hints` cho group scoring
-
-Inputs:
+Input:
 
 - topic
-- keyword map tu Phase 1
-- optional user hints / excluded terms / seed groups
+- keyword map
+- optional exclusions
+- optional seed groups
 
-Outputs:
+Output:
 
-- `retrieval_profile`
+- `anchors`
+- `related_terms`
+- `negative_terms`
+- `query_families`
+- `source_hints`
 
-Example shape:
+### Step 2 - Plan query/source paths
 
-```json
-{
-  "anchors": ["tpbank evo", "the evo", "tpbank"],
-  "related_terms": ["phi thuong nien", "cashback", "han muc", "mien phi", "review"],
-  "negative_terms": ["ib", "inbox", "mo the", "ref", "chot don"],
-  "query_families": [
-    {"intent": "brand", "query": "tpbank evo"},
-    {"intent": "pain_point", "query": "phi tpbank evo"},
-    {"intent": "question", "query": "tpbank evo co tot khong"}
-  ]
-}
-```
+Each run builds a queue of paths such as:
 
-### 2. RetrievalCandidateStore
+- `SEARCH_POSTS + brand`
+- `SEARCH_POSTS + pain_point`
+- `SEARCH_GROUPS + brand`
+- `SEARCH_IN_GROUP + accepted_group`
+- `CRAWL_FEED + accepted_group`
 
-Decision:
+### Step 3 - Fetch one batch of roughly 20 posts
 
-- can co candidate layer truoc accepted analysis set
+The system should not blindly crawl one path forever.
 
-Implementation options:
+For one query/source path:
 
-- Option A:
-  them bang moi `retrieval_candidates`
-- Option B:
-  mo rong `crawled_posts` voi stages
+- fetch the next top `20` posts
+- normalize lightweight metadata
+- persist them immediately with query/source/batch context
 
-Recommendation:
+This preserves auditability before any accept/reject decision is made.
 
-- Neu muon lam nhanh: Option B
-- Neu muon kien truc sach va audit tot: Option A
+### Step 4 - Score each post candidate
 
-Key fields:
+Each candidate is scored by deterministic rules, not AI.
 
-- `candidate_id`
-- `run_id`
-- `source_type`
-- `query_family`
-- `record_type`
-- `source_url`
-- `raw_text`
-- `normalized_text`
-- `parent_ref`
-- `candidate_status`
-- `score_total`
-- `score_breakdown_json`
-- `rejection_reason`
-
-### 3. DeterministicRelevanceEngine
-
-Responsibility:
-
-- score post/comment truoc AI
-- tra ve `ACCEPTED`, `REJECTED`, `UNCERTAIN`
-
-Score dimensions:
+Initial score dimensions:
 
 - `anchor_score`
 - `related_score`
 - `negative_penalty`
 - `quality_score`
 - `source_score`
-- `parent_context_score` cho comments
 
-Decision shape:
+Output:
 
-```json
-{
-  "status": "ACCEPTED",
-  "score_total": 0.78,
-  "score_breakdown": {
-    "anchor_score": 0.40,
-    "related_score": 0.20,
-    "quality_score": 0.10,
-    "source_score": 0.08,
-    "negative_penalty": 0.00
-  },
-  "reason": "matched brand anchor + pain context + clean text"
-}
-```
+- `ACCEPTED`
+- `REJECTED`
+- `UNCERTAIN`
+- `score_total`
+- `score_breakdown`
+- `rejection_reason` or decision reason
 
-### 4. SelectiveExpansionPolicy
+### Step 5 - Evaluate batch health
 
-Responsibility:
+After scoring the batch, compute:
 
-- chi quyet dinh co crawl tiep khong
+- `accepted_ratio`
+- `uncertain_ratio`
+- `strong_accept_count`
+- `consecutive_weak_batches`
 
-Rules:
+Initial default policy for Phase 8:
 
-- `ACCEPTED` post -> cho crawl comments
-- `REJECTED` post -> khong crawl comments
-- `UNCERTAIN` post -> optional theo mode
-- group/source co accepted ratio thap -> giam uu tien crawl sau
+- continue path when `accepted_ratio >= 0.25`
+- also continue when `strong_accept_count >= 3` even if accepted ratio is slightly lower
+- mark batch weak when `accepted_ratio < 0.10` and `uncertain_ratio < 0.20`
+- stop a path after `2` consecutive weak batches
+- also stop a path when `60` scanned posts still produce fewer than `3` accepted posts
 
-### 5. CleanPayloadBuilder
+These values are default heuristics, not hard product law. They should be configurable.
 
-Responsibility:
+### Step 6 - Selective expansion
 
-- bien accepted candidate thanh payload sach cho labeling/theme
+For posts in the batch:
 
-Functions:
+- `ACCEPTED` -> allow comment crawl
+- `UNCERTAIN` -> allow comment crawl only in balanced mode
+- `REJECTED` -> do not crawl comments
+
+This is record-level gating. It exists at the same time as batch-level gating.
+
+### Step 7 - Score comments with parent context
+
+Comments are handled like posts, but with parent context added:
+
+- comment becomes a candidate
+- comment receives deterministic scoring
+- parent post validity contributes to score
+
+Short comments can still pass if parent context is strong.
+
+### Step 8 - Build clean accepted payload
+
+Before labeling/theme analysis:
 
 - normalize whitespace
-- strip duplicate lines
-- strip UI chrome markers
-- detect overly generic text
-- dedupe by canonical url + normalized hash
+- strip duplicated lines
+- strip UI chrome fragments
+- compute canonical URL and normalized hash
 - attach quality flags
+- reject or downgrade records that remain too noisy
 
-### 6. AI Budget Guardrail
+### Step 9 - Guard AI budget and route provider calls
 
-Responsibility:
+Only then may records go to AI:
 
-- chi gui sang labeling/theme:
-  - accepted records
-  - hoac uncertain band neu config balance mode
+- strict mode -> accepted only
+- balanced mode -> accepted first, uncertain second
 
-Modes:
+All AI calls go through `AIClient`:
 
-- `strict`
-- `balanced`
-
----
-
-## Retrieval Strategy Changes
-
-### A. Query diversification
-
-Thay vi 1 query:
-
-- brand/entity query
-- question query
-- complaint query
-- comparison query
-- feature/use-case query
-
-### B. Source diversification
-
-Khong chi `SEARCH_POSTS`:
-
-- `SEARCH_GROUPS` tim nguon
-- `SEARCH_IN_GROUP` khi da co group relevance
-- `CRAWL_FEED` trong groups duoc cham diem tot
-- seed groups tu user / run history
-
-### C. Source scoring
-
-Moi source/group nen co score:
-
-- da co accepted post truoc day chua
-- private/public
-- co accessible khong
-- accepted ratio lich su
+- primary provider: `chiasegpu`
+- fallback provider: Claude
+- fallback only for provider/runtime failure classes
 
 ---
 
-## Rule Design Notes
+## 5. Record State Model
 
-### Post scoring
+### Record-level states
 
-Khong dung rule "phai chua tat ca mandatory keywords".
-Dung rule:
+- `DISCOVERED`
+- `SCORED_ACCEPTED`
+- `SCORED_REJECTED`
+- `SCORED_UNCERTAIN`
+- `EXPANDED`
+- `CLEAN_ACCEPTED`
+- `AI_QUEUED`
+- `AI_DONE`
 
-- cham it nhat 1 anchor cluster
-- dat tong score tren threshold
-- negative terms co the reject som
+### Query-path states
 
-### Comment scoring
-
-Khong bat comment phai tu than chua full topic.
-
-Dung rule:
-
-- parent post validity la input
-- comment co the ngan nhung van valid neu context manh
-- generic comment van reject neu quality score qua thap
-
-### Vietnamese normalization
-
-Can support:
-
-- co dau / khong dau
-- slang
-- typo nhe
-- viet tat pho bien
-
-Neu bo qua phan nay, exact keyword rules se qua mong manh.
+- `ACTIVE`
+- `WEAK`
+- `STOPPED`
+- `EXHAUSTED`
 
 ---
 
-## Data Model Direction
+## 6. Phase 8 Persistence Path
 
-### Minimal-change path
+Phase 8 should extend `crawled_posts` instead of adding a new candidate table first.
 
-Mo rong `crawled_posts`:
+Recommended new fields:
 
 - `processing_stage`
 - `pre_ai_status`
 - `pre_ai_score`
 - `pre_ai_reason`
+- `score_breakdown_json`
 - `quality_flags_json`
 - `query_family`
 - `source_type`
+- `source_batch_index`
+- `batch_decision`
+- `provider_used`
+- `fallback_used`
 
-Pros:
+Why this path is locked:
 
-- ship nhanh
-
-Cons:
-
-- raw candidates va accepted analysis set van tron lifecycle
-
-### Cleaner path
-
-Them `retrieval_candidates` va giu `crawled_posts` cho accepted records.
-
-Pros:
-
-- clean architecture
-- de audit accepted/rejected/uncertain
-- de thong ke cost
-
-Cons:
-
-- them schema va orchestration
-
-Recommendation:
-
-- Neu Phase 7 muon giai bai toan chat luong nghiem tuc, nen di theo cleaner path
+- it fits the current codebase fastest
+- it avoids a bigger migration before the scoring model is validated
+- it still leaves room for a future dedicated candidate table if needed
 
 ---
 
-## Suggested Delivery Order
+## 7. Core Modules
 
-### Slice 1 — Retrieval profile + audit metrics
+### RetrievalProfileBuilder
 
-- query families
-- source tags
-- acceptance metrics scaffold
+Builds the structured retrieval profile from topic input.
 
-### Slice 2 — Post relevance engine
+### QueryExecutionPlanner
 
-- anchor/related/negative/quality scoring
-- accepted/rejected/uncertain
+Creates ordered query/source paths and manages batch budgets.
 
-### Slice 3 — Selective comment crawl
+### DeterministicRelevanceEngine
 
-- chi crawl comments cho valid posts
-- comment parent-aware scoring
+Scores posts before expansion and before AI.
 
-### Slice 4 — Clean payload builder
+### BatchHealthEvaluator
 
-- normalization
-- dedupe
-- quality flags
+Decides whether a query/source path should continue.
 
-### Slice 5 — AI budget guardrail
+### SelectiveExpansionPolicy
 
-- strict/balanced mode
-- accepted-to-AI metrics
+Allows or blocks comment crawl per post and per mode.
 
----
+### ParentAwareCommentScorer
 
-## Success Metrics
+Scores comments with parent-post context.
 
-- `candidates_retrieved`
-- `accepted_count`
-- `rejected_count`
-- `uncertain_count`
-- `accepted_ratio`
-- `comments_crawled_per_accepted_post`
-- `ai_records_processed`
-- `accepted_to_ai_ratio`
-- `duplicate_rate`
-- `noise_flag_rate`
-- `accepted_ratio_by_query_family`
-- `accepted_ratio_by_source`
+### CleanPayloadBuilder
+
+Prepares accepted records for downstream AI.
+
+### AIBudgetGuardrail
+
+Controls which records are eligible for labeling/theme analysis.
+
+### AIClient Provider Router
+
+Enforces provider selection, retry, fallback, and telemetry rules.
 
 ---
 
-## Recommendation
+## 8. AI Provider Routing
 
-- Chot Phase 7 nhu mot bai toan retrieval-quality phase, khong phai chi la them keyword filter
-- Implement theo huong:
-  - multi-source retrieval
-  - deterministic relevance engine
-  - selective expansion
-  - clean payload builder
-  - AI chi cho accepted data
+Provider flow for every AI interaction:
+
+1. call `chiasegpu`
+2. retry once for retryable provider failure
+3. fallback to Claude only if retryable failure persists
+4. fail hard when fallback also fails
+
+Fallback is allowed for:
+
+- timeout
+- transport/network failure
+- HTTP 429
+- HTTP 5xx
+- invalid provider envelope
+- empty model content
+
+Fallback is not allowed for:
+
+- unsupported model configuration
+- invalid request payload
+- prompt/schema design bugs
+- deterministic validation failures after receiving a valid response
+
+---
+
+## 9. Metrics And Audit Output
+
+The system should produce:
+
+- accepted/rejected/uncertain counts per query family
+- accepted/rejected/uncertain counts per source type
+- batch health per query/source path
+- number of comments crawled from accepted posts
+- accepted-to-AI ratio
+- provider usage by service
+- fallback count and fallback reason
+
+---
+
+## 10. Phase 8 Implementation Slices
+
+### Slice 1
+
+Retrieval profile builder plus query/source metadata persistence.
+
+### Slice 2
+
+Post candidate scoring and `pre_ai_status` persistence.
+
+### Slice 3
+
+Batch health evaluation and path stopping rules.
+
+### Slice 4
+
+Selective expansion and parent-aware comment scoring.
+
+### Slice 5
+
+Clean payload builder and dedupe/quality flags.
+
+### Slice 6
+
+AI budget guardrail, provider failover, and telemetry.
+
+---
+
+## 11. Design Summary
+
+Phase 7 Solution Flow V2 is intentionally simple:
+
+`scan in small batches -> score quickly -> continue only healthy paths -> expand only accepted records -> clean payload -> call AI carefully`
+
+That is the concrete architecture Phase 8 should now build.

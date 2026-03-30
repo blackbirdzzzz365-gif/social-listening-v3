@@ -1,223 +1,306 @@
-# BA Problem Brief / BRD — Phase 7
+# BRD / BA Problem Brief - Phase 7
+## Retrieval Quality Gating Before AI Cost
 
-## Metadata
+**Status:** Locked scope feeding Phase 8 implementation  
+**Updated:** 2026-03-31
 
-- Initiative: Phase 7 — Retrieval Quality Gating Before AI Cost
-- Owner: Social Listening v3 product + research workflow team
-- Primary layers:
-  - planner query generation
-  - browser retrieval layer
-  - pre-AI validation / gating
-  - crawl payload normalization
+---
 
-## Problem
+## 1. Executive Summary
 
-- Problem statement:
-  Social Listening v3 da crawl duoc post/comment va da co labeling/theme pipeline, nhung chat luong retrieval dau vao van chua du on dinh. Neu account Facebook chua co dung graph/group context, global search co the ra rat it post lien quan. Khi da lay duoc candidates, system hien tai chua co relevance gate manh truoc persist/crawl-comments/AI labeling. Ket qua la du lieu ban dau vua thieu vua ban, gay ton chi phi AI va lam theme analysis giam do tin cay.
-- Who is affected:
-  researcher, marketer, founder, va team van hanh muon dung social listening cho insight that su lien quan
-- Why this matters:
-  chat luong insight khong the cao hon chat luong retrieval. Neu retrieval cold-start + dirty-input khong duoc giai quyet, moi phase labeling/theme sau do deu phai "don rac" va van ton cost.
-- Current cost of problem:
-  search miss, crawl nhieu record khong lien quan, crawl comments tu post yeu, AI labeling/analyze ton them cost, theme output nhieu noise va can doc thu cong de xac minh
+`social-listening-v3` already has:
 
-## Current-State Analysis
+- browser retrieval
+- crawl persistence
+- content labeling
+- theme analysis
 
-### A. Search coverage van phu thuoc qua nhieu vao account context
+But the system still spends too much effort and AI cost on weak input. The core problem is no longer "can we crawl?" but "can we decide early which records are worth crawling deeper and worth paying AI for?"
 
-- `SEARCH_POSTS` hien tai di vao Facebook global search va ap `Most recent`
-- Neu account chua tung o dung he sinh thai group/topic, recall co the rat thap
-- Flow hien tai moi chi partly exploit `SEARCH_GROUPS -> SEARCH_IN_GROUP -> CRAWL_FEED`
+Phase 7 locks the operating model that Phase 8 must implement:
 
-### B. Candidate validation chua du chat
+- diversified retrieval instead of one search string
+- deterministic relevance gating before deep crawl and before AI
+- query/source continuation only while retrieved batches stay healthy
+- clean payload generation before labeling/theme analysis
+- centralized AI provider routing with `chiasegpu` as primary and Claude as fallback
 
-- Browser retrieval layer hien dang accept kha nhieu article chi can co text + URL
-- Chua co co che:
-  - `must-have anchors`
-  - `related topic coverage`
-  - `negative keyword / promo penalty`
-  - `quality score`
-  - `accept / reject / uncertain`
+---
 
-### C. Dirty crawl payload di thang xuong labeling/theme
+## 2. Product Context
 
-- Nhieu extraction hien tai dua tren `inner_text()` rong
-- Payload de bi lan:
-  - UI chrome
-  - group title
-  - menu text
-  - duplicate fragments
-  - noisy thread context
-- Hien tai Phase 2 label/filter xu ly sau crawl, nen neu input ban thi AI van phai "ganh"
+### Current product capability
 
-## Root Causes By Problem
+The product can already:
 
-### Problem 1 — "Search khong co bai viet lien quan neu account chua tung tham gia group dung topic"
+- generate a plan from topic input
+- execute browser actions against Facebook
+- persist crawled posts/comments
+- label content and generate themes
+
+### Current product weakness
+
+The quality of downstream insight is capped by the quality of retrieval and extraction:
+
+- cold or weak Facebook search gives poor recall
+- noisy retrieved records waste crawl and AI budget
+- dirty payloads reduce labeling and theme quality
+
+### Why this must be solved now
+
+If retrieval quality stays weak, every later phase keeps paying for garbage-in:
+
+- comment crawl expands weak threads
+- AI is used on records that should have been rejected by rules
+- operators cannot explain why one query/source worked and another failed
+
+---
+
+## 3. Problem Statement
+
+The system currently lacks a strong pre-AI gating model across retrieval, expansion, and provider execution. As a result:
+
+- relevant posts can be missed because Facebook search is context-dependent
+- low-quality posts can still move forward to comment crawl and labeling
+- extraction noise reaches downstream analysis
+- AI cost is spent before enough deterministic filtering has happened
+
+---
+
+## 4. Users Affected
+
+- researcher who needs relevant qualitative signal fast
+- marketer who wants actual user pain points, not retrieval noise
+- founder or operator who cares about trustworthy insight and AI cost efficiency
+
+---
+
+## 5. Root Causes
+
+### Problem A - Search miss
 
 Root causes:
 
-- Facebook search mang tinh ca nhan hoa
-- cold account khong co graph/context du de expose dung content
-- query generation hien dang ngan va chua da dang theo intent
-- chua co seed-source strategy ro rang
+- Facebook global search is personalized
+- cold accounts lack graph/group context
+- current query generation is too shallow
+- source diversification is underused
 
-### Problem 2 — "Chua filter duoc hieu qua ket qua search post"
-
-Root causes:
-
-- retrieval layer chua co deterministic relevance gate
-- post validity dang bi xac dinh qua long leo
-- comment crawl dang duoc trigger tu discovered posts ma chua qua gate chat luong
-- khong co negative/promo patterns de tru diem som
-
-### Problem 3 — "Crawl data khong chuan gay ton cost AI va phan tich sai"
+### Problem B - Weak filtering
 
 Root causes:
 
-- extraction text qua rong va chua co payload cleaning stage rieng
-- chua co quality flags / extraction score
-- chua co candidate-state ro rang truoc khi vao labeling/theme
-- raw candidate va accepted record dang bi xem nhu cung 1 loai du lieu
+- no deterministic relevance engine before deep crawl
+- no batch-level decision on whether one query/source path is still worth pursuing
+- comment crawl can start from posts that have not been strongly validated
 
-## Phan Bien Y Tuong Hien Tai
+### Problem C - Dirty payload
 
-Y tuong cua user:
+Root causes:
 
-- sau buoc 1, xac dinh list tu khoa bat buoc
-- post phai co cac tu khoa nay moi valid
-- sau do check them cum tu khoa lien quan va doi hoi match toi thieu x%
-- step nay khong qua AI
+- extraction text can include UI chrome, duplicate fragments, and generic noise
+- there is no dedicated clean-payload stage before AI
+- raw candidates and analysis-ready records are not clearly separated
 
-### Diem manh
+### Problem D - AI routing is not yet governed as part of cost control
 
-- dung huong voi muc tieu giam cost AI
-- tang precision som o retrieval layer
-- tao duoc logic minh bach, de debug, de audit
-- rat hop de quyet dinh `co crawl comment tiep hay khong`
+Root causes:
 
-### Diem can phan bien
+- provider strategy is documented separately but not yet locked into the same retrieval-quality story
+- fallback conditions are currently too narrow and too implicit
+- telemetry for provider usage and failover is not yet part of retrieval-to-analysis auditability
 
-- Neu "bat buoc phai co exact keywords" qua cung, recall se giam manh
-- Comment hay post user that su lien quan nhieu khi khong nhac dung keyword chinh
-- Tieng Viet thuc te co:
-  - khong dau
-  - viet tat
-  - slang
-  - typo
-  - cach dien dat gian tiep
-- Comment khong the danh gia doc lap hoan toan khoi parent post
+---
 
-### Ket luan phan bien
+## 6. What We Are Deciding In Phase 7
 
-Huong dung khong phai la `exact mandatory keyword filter` thuong truc, ma la:
+### D-70 - Retrieval must be profile-driven
 
-- `anchor terms` phai cham toi thieu 1 cluster
-- `related context terms` dong vai tro score tang cuong
-- `negative patterns` dong vai tro tru diem / reject som
-- `quality signals` quyet dinh co dang crawl tiep hay khong
-- comment duoc cham diem voi parent context
+Each topic must produce a `retrieval_profile` containing:
 
-Noi cach khac: y tuong cua user nen duoc nang cap thanh **deterministic relevance engine**, khong nen dung o exact keyword gate don gian.
+- anchor clusters
+- related-term clusters
+- negative patterns
+- query families
+- optional seed groups and source hints
 
-## Desired Outcome
+### D-71 - Query execution must be batch-gated
 
-- Target user/business outcome:
-  he thong lay duoc dung hon, loc som hon, va chi ton AI cost cho records da co kha nang tao insight
-- Success signals:
-  - tang precision cua accepted posts/comments
-  - giam AI calls moi accepted insight run
-  - giam duplicate/noise rate
-  - tang ti le theme "doc vao thay dung van de user dang noi"
+For each query/source path:
 
-## Proposed Decision Direction
+- fetch roughly the top `20` posts
+- score them deterministically
+- calculate batch health
+- continue the path only while the batch remains healthy
 
-### D-70 — Retrieval khong duoc chi dua vao Facebook global search
+This is the main Solution Flow V2 upgrade.
 
-Can co strategy da nguon:
+### D-72 - Candidate persistence happens before the relevance decision
 
-- global search
-- search groups
-- search in group
-- feed crawl trong group da xac dinh
-- seed groups tu lich su / user curation
+Every retrieved item is first stored as a candidate with source and query context, then scored into:
 
-### D-71 — Chi valid posts moi duoc expansion tiep
+- `ACCEPTED`
+- `REJECTED`
+- `UNCERTAIN`
 
-`crawl_comments` va `search_in_group` bo sung chi nen chay tren nguon hoac post da vuot relevance gate.
+This preserves explainability, rejection reasons, and source/query diagnostics.
 
-### D-72 — Persist candidate va accepted record theo 2 tang
+### D-73 - Record-level gating drives selective expansion
 
-Khong nen bat moi record retrieval di thang vao cung lifecycle voi records san sang labeling/theme.
+- accepted posts may trigger comment crawl
+- uncertain posts may trigger comment crawl only in allowed modes
+- rejected posts do not expand further
 
-2 lua chon:
+### D-74 - Query-level gating and record-level gating both exist
 
-- Option A: them `retrieval_candidates` rieng
-- Option B: giu 1 bang nhung them `processing_stage`, `pre_ai_status`, `rejection_reason`
+Phase 7 does not choose between them. It uses both:
 
-Khuyen nghi:
+- record-level gating decides whether one post/comment can move forward
+- batch-level gating decides whether one query/source path is still worth exploring
 
-- Option A sach hon ve kien truc
-- Option B nhanh ship hon neu muon it schema change
+### D-75 - Phase 8 implementation will use the minimal-change persistence path
 
-### D-73 — AI chi danh cho accepted hoac uncertain band
+To reduce schema churn and ship faster on the current codebase, Phase 8 should extend `crawled_posts` with pre-AI fields instead of introducing a new `retrieval_candidates` table in the first delivery slice.
 
-Rule-based gate la default.
-AI chi xu ly:
+Future migration to a separate candidate table remains allowed, but it is not the Phase 8 default path.
 
-- accepted records cho labeling/theme
-- hoac uncertain records neu muon can bang recall
+### D-76 - AI remains behind the quality gate
 
-## Requirement Split
+AI is allowed only for:
+
+- accepted records
+- uncertain records when the run is in an explicitly configured balanced mode
+
+AI must not become the first-pass relevance filter.
+
+### D-77 - AI provider routing is centralized and policy-driven
+
+All AI calls must go through `AIClient`:
+
+- primary provider: `chiasegpu`
+- fallback provider: Claude
+- fallback allowed only for provider/runtime failures
+- no automatic fallback for deterministic request, prompt, schema, or payload bugs
+
+---
+
+## 7. Goals
+
+### Product goals
+
+- increase precision of accepted posts/comments
+- reduce wasted comment crawl on weak posts
+- reduce AI calls per useful insight run
+- improve trust in theme outputs by improving input quality
+
+### Operational goals
+
+- expose accepted/rejected ratios by query family and source
+- expose why a record was rejected
+- expose when and why provider fallback happened
+
+---
+
+## 8. Success Metrics
+
+Phase 8 should measure at least:
+
+- `candidates_retrieved`
+- `accepted_count`
+- `rejected_count`
+- `uncertain_count`
+- `accepted_ratio`
+- `comments_crawled_from_accepted_posts`
+- `ai_records_processed`
+- `accepted_to_ai_ratio`
+- `accepted_ratio_by_query_family`
+- `accepted_ratio_by_source_type`
+- `provider_usage_by_service`
+- `fallback_count_by_reason`
+
+---
+
+## 9. Requirements Split
 
 ### Retrieval
 
-- query diversification theo intent
-- seed source strategy
-- source scoring cho group/post source
+- build query families from one topic
+- support multiple source paths
+- attach source and query metadata to each candidate
 
 ### Validation
 
-- anchor/related/negative/quality scoring
-- accept/reject/uncertain states
-- parent-aware comment validation
+- deterministic scoring for posts and comments
+- parent-aware scoring for comments
+- record decisions must be explainable
+
+### Batch Gating
+
+- assess each 20-post batch
+- stop weak query/source paths early
+- continue healthy ones
 
 ### Expansion
 
-- chi crawl comments tu posts da valid
-- chi search/crawl sau tren groups da du relevance
+- comment crawl only for passed posts by policy
+- no blind expansion from weak candidates
 
 ### Clean Payload
 
-- text normalization
-- UI-noise stripping
-- duplicate detection
-- extraction quality flags
+- normalize text
+- strip UI noise
+- detect duplicates
+- attach quality flags before AI
 
-### Cost Control
+### AI Routing
 
-- chi accepted records di vao labeling/theme
-- dashboard thong ke chi phi / accepted record
+- use `chiasegpu` first
+- fallback to Claude only for allowed provider failures
+- record provider telemetry
 
-## Constraints
+### Auditability
 
-- Khong duoc lam retrieval logic qua mo ho de khong debug duoc
-- Khong duoc lam recall giam manh vi overfitting exact keyword
-- Van phai ton trong Phase 2 principle ve explainability va auditability
-- Khong nen dua AI quay lai lam "bo loc dau tien"
+- query/source/batch metrics
+- record-level score breakdown
+- provider and fallback metadata
 
-## Non-goals
+---
 
-- Khong co gang giai bai toan "Facebook search hoan hao"
-- Khong co gang xac dinh danh tinh that cua tac gia
-- Khong lam full semantic search engine ben ngoai Facebook trong Phase 7
-- Khong thay the toan bo theme/labeling pipeline bang rules
+## 10. Scope For Phase 8
 
-## Recommendation
+Phase 8 should implement:
 
-- Next artifact:
-  khoa scope Phase 7 thanh 5 lop delivery:
-  1. retrieval strategy
-  2. deterministic relevance engine
-  3. selective expansion
-  4. clean payload builder
-  5. AI budget guardrails + audit metrics
+1. retrieval profile builder
+2. batch-based query execution
+3. deterministic post scoring
+4. selective comment expansion
+5. parent-aware comment scoring
+6. clean payload builder
+7. AI budget guardrail
+8. AI provider failover policy and telemetry
+
+Phase 8 does not need to implement:
+
+- full semantic retrieval outside Facebook
+- automatic query self-learning loops
+- human review UI for all rejected records
+- a new standalone candidate table if the extended `crawled_posts` path is sufficient
+
+---
+
+## 11. Constraints
+
+- retrieval logic must stay explainable and debuggable
+- exact mandatory keywords cannot be the only gate
+- Vietnamese text normalization must support no-diacritic, slang, and mild typo variations
+- AI cannot hide deterministic product bugs via automatic fallback
+
+---
+
+## 12. Recommendation
+
+The system should be built around one concrete rule:
+
+`retrieve broadly -> score fast -> continue only healthy paths -> crawl deeper only for accepted records -> clean payload -> spend AI carefully`
+
+That is the locked business direction for Phase 7 and the implementation contract for Phase 8.

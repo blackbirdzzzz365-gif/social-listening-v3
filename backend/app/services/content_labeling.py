@@ -31,8 +31,9 @@ class ContentLabelingService:
             db_posts = session.scalars(
                 select(CrawledPost)
                 .where(CrawledPost.run_id == job.run_id)
-                .order_by(CrawledPost.crawled_at.asc(), CrawledPost.post_id.asc())
+                    .order_by(CrawledPost.crawled_at.asc(), CrawledPost.post_id.asc())
             ).all()
+            db_posts = [post for post in db_posts if self._is_ai_eligible(post)]
             posts = [
                 {
                     "post_id": post.post_id,
@@ -163,13 +164,26 @@ class ContentLabelingService:
         if not isinstance(labeled_records, list):
             return {}
         results: dict[str, dict[str, object]] = {}
+        provider_meta = response.get("_provider_meta") if isinstance(response, dict) else None
         for item in labeled_records:
             if not isinstance(item, dict):
                 continue
             post_id = str(item.get("post_id") or "").strip()
             if post_id:
+                if provider_meta and not item.get("model_name"):
+                    item["model_name"] = str(provider_meta.get("provider_used") or self._settings.content_labeling_model)
                 results[post_id] = item
         return results
+
+    def _is_ai_eligible(self, post: CrawledPost) -> bool:
+        status = (post.pre_ai_status or "").upper()
+        if not status:
+            return True
+        if status == "ACCEPTED":
+            return True
+        if status == "UNCERTAIN":
+            return self._settings.pre_ai_mode.lower() == "balanced"
+        return False
 
     def _persist_label(self, session, job: LabelJob, post_id: str, payload: dict[str, object]) -> None:
         post = session.get(CrawledPost, post_id)

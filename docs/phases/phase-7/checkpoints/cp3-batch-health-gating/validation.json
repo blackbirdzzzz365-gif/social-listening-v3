@@ -1,0 +1,11 @@
+{
+  "cp": "cp3-batch-health-gating",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "",
+  "summary": "",
+  "checks": [],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp4-selective-expansion-comments"
+}

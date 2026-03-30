@@ -46,6 +46,7 @@ async def lifespan_factory(app: FastAPI, settings: Settings) -> AsyncIterator[No
         app.state.browser_agent,
         app.state.health_monitor,
         app.state.label_job_service,
+        settings,
     )
     app.state.insight_service = InsightService(app.state.ai_client, settings)
     app.state.browser_setup_task = None

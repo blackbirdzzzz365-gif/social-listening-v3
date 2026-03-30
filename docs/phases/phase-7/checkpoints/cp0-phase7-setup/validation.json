@@ -1,0 +1,11 @@
+{
+  "cp": "cp0-phase7-setup",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "",
+  "summary": "",
+  "checks": [],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp1-retrieval-profile-builder"
+}

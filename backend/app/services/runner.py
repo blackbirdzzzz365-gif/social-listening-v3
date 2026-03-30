@@ -15,10 +15,12 @@ from app.infrastructure.database import SessionLocal
 from app.models.approval import ApprovalGrant
 from app.models.crawled_post import CrawledPost
 from app.models.plan import Plan, PlanStep
+from app.models.product_context import ProductContext
 from app.models.run import PlanRun, StepRun
 from app.services.health_monitor import HealthMonitorService, utc_now_iso
 from app.services.label_job_service import LabelJobService
 from app.services.planner import get_public_step_id
+from app.services.retrieval_quality import BatchHealthEvaluator, DeterministicRelevanceEngine, RetrievalProfileBuilder
 
 
 @dataclass
@@ -37,14 +39,24 @@ class RunnerService:
         browser_agent: BrowserAgent,
         health_monitor: HealthMonitorService,
         label_job_service: LabelJobService | None = None,
+        settings: Any | None = None,
     ) -> None:
         self._browser_agent = browser_agent
         self._health_monitor = health_monitor
         self._label_job_service = label_job_service
+        self._settings = settings
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._controls: dict[str, RunControl] = {}
         self._subscribers: dict[str, list[asyncio.Queue[tuple[str, dict[str, Any]]]]] = {}
         self._history: dict[str, list[tuple[str, dict[str, Any]]]] = {}
+        self._retrieval_profile_builder = RetrievalProfileBuilder()
+        self._relevance_engine = DeterministicRelevanceEngine()
+        self._batch_evaluator = BatchHealthEvaluator(
+            continue_ratio=getattr(settings, "retrieval_continue_accepted_ratio", 0.25),
+            weak_ratio=getattr(settings, "retrieval_weak_accepted_ratio", 0.10),
+            weak_uncertain_ratio=getattr(settings, "retrieval_weak_uncertain_ratio", 0.20),
+            strong_accept_count=getattr(settings, "retrieval_strong_accept_count", 3),
+        )
 
     async def start_run(self, plan_id: str, grant_id: str) -> dict[str, Any]:
         run_id = f"run-{uuid4().hex[:10]}"
@@ -384,6 +396,8 @@ class RunnerService:
             crawled_group_ids: list[str] = []
             persisted_total = 0
             duplicate_total = 0
+            all_checkpoint_posts: list[dict[str, Any]] = []
+            all_batch_summaries: list[dict[str, Any]] = []
             for group_id in group_ids:
                 if remaining <= 0:
                     break
@@ -392,12 +406,24 @@ class RunnerService:
                     target_count=remaining,
                     checkpoint=checkpoint,
                 )
+                for post in posts:
+                    post["source_group_id"] = group_id
                 if posts:
                     crawled_group_ids.append(group_id)
                 all_posts.extend(posts)
-                persisted_count, duplicate_count = self._persist_posts(run_id, step_run.step_run_id, posts)
+                processed = self._process_candidates(
+                    run_id=run_id,
+                    step_run_id=step_run.step_run_id,
+                    records=posts,
+                    source_type=step.action_type,
+                    query_text=step.target,
+                )
+                persisted_count = processed["persisted_count"]
+                duplicate_count = processed["duplicate_count"]
                 persisted_total += persisted_count
                 duplicate_total += duplicate_count
+                all_checkpoint_posts.extend(processed["posts"])
+                all_batch_summaries.extend(processed["batch_summaries"])
                 remaining -= len(posts)
             return {
                 "actual_count": len(all_posts),
@@ -409,6 +435,8 @@ class RunnerService:
                     "collected_count": len(all_posts),
                     "persisted_count": persisted_total,
                     "duplicate_count": duplicate_total,
+                    "batch_summaries": all_batch_summaries,
+                    "posts": all_checkpoint_posts,
                 },
             }
 
@@ -488,9 +516,18 @@ class RunnerService:
                         posted_at=p.get("posted_at"),
                         reaction_count=p.get("reaction_count", 0),
                         comment_count=p.get("comment_count", 0),
+                        source_group_id=p.get("source_group_id"),
                     )
                 )
-            persisted_count, duplicate_count = self._persist_posts(run_id, step_run.step_run_id, posts_as_raw)
+            processed = self._process_candidates(
+                run_id=run_id,
+                step_run_id=step_run.step_run_id,
+                records=posts_as_raw,
+                source_type=step.action_type,
+                query_text=step.target,
+            )
+            persisted_count = processed["persisted_count"]
+            duplicate_count = processed["duplicate_count"]
             checkpoint_posts = [
                 {
                     "post_id": p["post_id"],
@@ -509,8 +546,10 @@ class RunnerService:
                 "checkpoint": {
                     "phase": "done",
                     "step_id": public_step_id,
-                    "posts": checkpoint_posts,
+                    "posts": processed["posts"],
                     "discovered_groups": result["discovered_groups"],
+                    "accepted_group_ids": processed["accepted_group_ids"],
+                    "batch_summaries": processed["batch_summaries"],
                     "persisted_count": persisted_count,
                     "duplicate_count": duplicate_count,
                 },
@@ -521,6 +560,8 @@ class RunnerService:
             all_comments: list[RawPost] = []
             persisted_total = 0
             duplicate_total = 0
+            all_checkpoint_comments: list[dict[str, Any]] = []
+            all_batch_summaries: list[dict[str, Any]] = []
             per_post_limit = max(1, (step.estimated_count or 20) // max(len(post_refs), 1))
             for post_ref in post_refs:
                 comments = await self._browser_agent.crawl_comments(
@@ -530,9 +571,19 @@ class RunnerService:
                     source_group_id=post_ref.get("source_group_id"),
                 )
                 all_comments.extend(comments)
-                persisted, dupes = self._persist_posts(run_id, step_run.step_run_id, comments)
+                processed = self._process_candidates(
+                    run_id=run_id,
+                    step_run_id=step_run.step_run_id,
+                    records=comments,
+                    source_type=step.action_type,
+                    query_text=post_ref.get("query_text") or step.target,
+                )
+                persisted = processed["persisted_count"]
+                dupes = processed["duplicate_count"]
                 persisted_total += persisted
                 duplicate_total += dupes
+                all_checkpoint_comments.extend(processed["posts"])
+                all_batch_summaries.extend(processed["batch_summaries"])
             return {
                 "actual_count": len(all_comments),
                 "records_added": persisted_total,
@@ -543,6 +594,8 @@ class RunnerService:
                     "collected_count": len(all_comments),
                     "persisted_count": persisted_total,
                     "duplicate_count": duplicate_total,
+                    "posts": all_checkpoint_comments,
+                    "batch_summaries": all_batch_summaries,
                 },
             }
 
@@ -552,6 +605,8 @@ class RunnerService:
             all_posts: list[RawPost] = []
             persisted_total = 0
             duplicate_total = 0
+            all_checkpoint_posts: list[dict[str, Any]] = []
+            all_batch_summaries: list[dict[str, Any]] = []
             remaining = step.estimated_count or 10
             for group_id in group_ids:
                 if remaining <= 0:
@@ -559,11 +614,23 @@ class RunnerService:
                 posts = await self._browser_agent.search_in_group(
                     group_id, query, target_count=remaining
                 )
+                for post in posts:
+                    post["source_group_id"] = group_id
                 all_posts.extend(posts)
-                persisted, dupes = self._persist_posts(run_id, step_run.step_run_id, posts)
+                processed = self._process_candidates(
+                    run_id=run_id,
+                    step_run_id=step_run.step_run_id,
+                    records=posts,
+                    source_type=step.action_type,
+                    query_text=query,
+                )
+                persisted = processed["persisted_count"]
+                dupes = processed["duplicate_count"]
                 persisted_total += persisted
                 duplicate_total += dupes
                 remaining -= len(posts)
+                all_checkpoint_posts.extend(processed["posts"])
+                all_batch_summaries.extend(processed["batch_summaries"])
             return {
                 "actual_count": len(all_posts),
                 "records_added": persisted_total,
@@ -575,6 +642,8 @@ class RunnerService:
                     "collected_count": len(all_posts),
                     "persisted_count": persisted_total,
                     "duplicate_count": duplicate_total,
+                    "posts": all_checkpoint_posts,
+                    "batch_summaries": all_batch_summaries,
                 },
             }
 
@@ -650,16 +719,21 @@ class RunnerService:
     def _resolve_post_refs(self, run_id: str, step: PlanStep) -> list[dict[str, str]]:
         payloads = self._get_step_payloads(run_id)
         post_refs: list[dict[str, str]] = []
+        allowed_statuses = {"ACCEPTED"}
+        if self._allows_uncertain():
+            allowed_statuses.add("UNCERTAIN")
         for ref in self._extract_step_refs(step):
             payload = payloads.get(ref, {})
             for post in payload.get("posts", []):
                 url = post.get("post_url")
-                if url:
+                status = post.get("pre_ai_status")
+                if url and (status is None or status in allowed_statuses):
                     post_refs.append(
                         {
                             "post_id": post.get("post_id") or "",
                             "post_url": url,
                             "source_group_id": post.get("source_group_id") or "",
+                            "query_text": post.get("query_text") or "",
                         }
                     )
         unique_refs: list[dict[str, str]] = []
@@ -676,6 +750,8 @@ class RunnerService:
         group_ids: list[str] = []
         for ref in self._extract_step_refs(step):
             payload = payloads.get(ref, {})
+            if payload.get("accepted_group_ids"):
+                group_ids.extend(payload["accepted_group_ids"])
             for group in payload.get("discovered_groups", []):
                 gid = group.get("group_id")
                 if gid:
@@ -792,6 +868,233 @@ class RunnerService:
             session.commit()
             duplicate_count = duplicate_in_batch + duplicate_in_run
             return inserted_count, duplicate_count
+
+    def _process_candidates(
+        self,
+        *,
+        run_id: str,
+        step_run_id: str,
+        records: list[dict[str, Any]],
+        source_type: str,
+        query_text: str,
+    ) -> dict[str, Any]:
+        if not records:
+            return {
+                "persisted_count": 0,
+                "duplicate_count": 0,
+                "posts": [],
+                "accepted_group_ids": [],
+                "batch_summaries": [],
+            }
+
+        batch_size = max(1, int(getattr(self._settings, "retrieval_batch_size", 20) or 20))
+        profile = self._get_retrieval_profile_for_run(run_id)
+        parent_context = self._load_parent_context_map(run_id) if any(r.get("record_type") == "COMMENT" for r in records) else {}
+        persisted_total = 0
+        duplicate_total = 0
+        checkpoint_posts: list[dict[str, Any]] = []
+        accepted_group_ids: list[str] = []
+        batch_summaries: list[dict[str, Any]] = []
+        consecutive_weak_batches = 0
+        total_accepted = 0
+        total_scanned = 0
+
+        for batch_index, start in enumerate(range(0, len(records), batch_size), start=1):
+            raw_batch = records[start : start + batch_size]
+            query_family = self._retrieval_profile_builder.infer_query_family(query_text, profile)
+            scored_entries: list[dict[str, Any]] = []
+            for raw in raw_batch:
+                raw["query_text"] = query_text
+                parent_entry = parent_context.get(raw.get("parent_post_id") or "") or parent_context.get(raw.get("parent_post_url") or "")
+                score = self._relevance_engine.score(
+                    content=str(raw.get("content") or ""),
+                    retrieval_profile=profile,
+                    record_type=str(raw.get("record_type") or "POST"),
+                    source_type=source_type,
+                    query_family=query_family,
+                    parent_text=(parent_entry or {}).get("content"),
+                    parent_status=(parent_entry or {}).get("status"),
+                )
+                scored_entries.append({"raw": raw, "score": score})
+
+            batch_health = self._batch_evaluator.evaluate([entry["score"] for entry in scored_entries])
+            total_accepted += batch_health.accepted_count
+            total_scanned += len(raw_batch)
+            if batch_health.decision == "weak":
+                consecutive_weak_batches += 1
+            else:
+                consecutive_weak_batches = 0
+
+            batch_decision = "continue"
+            if consecutive_weak_batches >= int(getattr(self._settings, "retrieval_max_consecutive_weak_batches", 2)):
+                batch_decision = "stop"
+            if total_scanned >= int(getattr(self._settings, "retrieval_max_scanned_per_path", 60)) and total_accepted < int(getattr(self._settings, "retrieval_min_accepted_per_path", 3)):
+                batch_decision = "stop"
+
+            persisted_count, duplicate_count, persisted_refs = self._persist_scored_posts(
+                run_id=run_id,
+                step_run_id=step_run_id,
+                scored_entries=scored_entries,
+                source_type=source_type,
+                batch_index=batch_index,
+                batch_decision=batch_decision,
+            )
+            persisted_total += persisted_count
+            duplicate_total += duplicate_count
+            checkpoint_posts.extend(persisted_refs)
+            accepted_group_ids.extend(
+                ref["source_group_id"]
+                for ref in persisted_refs
+                if ref.get("source_group_id") and ref.get("pre_ai_status") == "ACCEPTED"
+            )
+            summary = {"batch_index": batch_index, **batch_health.as_dict(), "batch_size": len(raw_batch), "batch_decision": batch_decision}
+            batch_summaries.append(summary)
+            if batch_decision == "stop":
+                break
+
+        return {
+            "persisted_count": persisted_total,
+            "duplicate_count": duplicate_total,
+            "posts": checkpoint_posts,
+            "accepted_group_ids": self._dedupe_keep_order(accepted_group_ids),
+            "batch_summaries": batch_summaries,
+        }
+
+    def _persist_scored_posts(
+        self,
+        *,
+        run_id: str,
+        step_run_id: str,
+        scored_entries: list[dict[str, Any]],
+        source_type: str,
+        batch_index: int,
+        batch_decision: str,
+    ) -> tuple[int, int, list[dict[str, Any]]]:
+        if not scored_entries:
+            return 0, 0, []
+
+        with SessionLocal() as session:
+            incoming_by_key: dict[str, dict[str, Any]] = {}
+            duplicate_in_batch = 0
+            for entry in scored_entries:
+                raw = entry["raw"]
+                dedupe_key = raw.get("source_url") or raw["post_id"]
+                if dedupe_key in incoming_by_key:
+                    duplicate_in_batch += 1
+                    continue
+                incoming_by_key[dedupe_key] = entry
+
+            existing_post_ids = set(
+                session.scalars(
+                    select(CrawledPost.post_id).where(
+                        CrawledPost.post_id.in_([entry["raw"]["post_id"] for entry in incoming_by_key.values()])
+                    )
+                ).all()
+            )
+            run_records = session.scalars(select(CrawledPost).where(CrawledPost.run_id == run_id)).all()
+            run_source_map = {record.source_url: record.post_id for record in run_records if record.source_url}
+
+            inserted_count = 0
+            duplicate_in_run = 0
+            post_id_aliases: dict[str, str] = {}
+            persisted_refs: list[dict[str, Any]] = []
+            for dedupe_key, entry in incoming_by_key.items():
+                raw = entry["raw"]
+                score = entry["score"]
+                if dedupe_key in run_source_map:
+                    duplicate_in_run += 1
+                    continue
+
+                original_post_id = raw["post_id"]
+                post_id = original_post_id
+                if post_id in existing_post_ids:
+                    post_id = self._build_run_scoped_post_id(session, run_id, original_post_id)
+
+                parent_post_id = raw.get("parent_post_id")
+                parent_post_url = raw.get("parent_post_url")
+                if parent_post_url and parent_post_url in run_source_map:
+                    parent_post_id = run_source_map[parent_post_url]
+                elif parent_post_id and parent_post_id in post_id_aliases:
+                    parent_post_id = post_id_aliases[parent_post_id]
+
+                processing_stage = "CLEAN_ACCEPTED" if score.status in {"ACCEPTED", "UNCERTAIN"} else "SCORED_REJECTED"
+                session.add(
+                    CrawledPost(
+                        post_id=post_id,
+                        run_id=run_id,
+                        step_run_id=step_run_id,
+                        group_id_hash=raw["group_id_hash"],
+                        content=raw["content"],
+                        content_masked=score.cleaned_text,
+                        record_type=raw.get("record_type", "POST"),
+                        source_url=raw.get("source_url"),
+                        parent_post_id=parent_post_id,
+                        parent_post_url=parent_post_url,
+                        posted_at=raw.get("posted_at"),
+                        reaction_count=raw.get("reaction_count", 0),
+                        comment_count=raw.get("comment_count", 0),
+                        processing_stage=processing_stage,
+                        pre_ai_status=score.status,
+                        pre_ai_score=score.score_total,
+                        pre_ai_reason=score.reason,
+                        score_breakdown_json=json.dumps(score.score_breakdown),
+                        quality_flags_json=json.dumps(score.quality_flags),
+                        query_family=score.query_family,
+                        source_type=source_type,
+                        source_batch_index=batch_index,
+                        batch_decision=batch_decision,
+                        is_excluded=score.status == "REJECTED",
+                        exclude_reason=score.reason if score.status == "REJECTED" else None,
+                    )
+                )
+                if raw.get("source_url"):
+                    run_source_map[raw["source_url"]] = post_id
+                post_id_aliases[original_post_id] = post_id
+                inserted_count += 1
+                persisted_refs.append(
+                    {
+                        "post_id": post_id,
+                        "post_url": raw.get("source_url"),
+                        "source_group_id": raw.get("source_group_id"),
+                        "pre_ai_status": score.status,
+                        "pre_ai_score": score.score_total,
+                        "query_family": score.query_family,
+                        "query_text": raw.get("query_text") or "",
+                    }
+                )
+            session.commit()
+            duplicate_count = duplicate_in_batch + duplicate_in_run
+            return inserted_count, duplicate_count, persisted_refs
+
+    def _get_retrieval_profile_for_run(self, run_id: str) -> dict[str, Any]:
+        with SessionLocal() as session:
+            run = session.get(PlanRun, run_id)
+            if run is None:
+                return {}
+            plan = session.get(Plan, run.plan_id)
+            if plan is None:
+                return {}
+            context = session.get(ProductContext, plan.context_id)
+            if context is None or not context.retrieval_profile_json:
+                return {}
+            try:
+                return json.loads(context.retrieval_profile_json)
+            except json.JSONDecodeError:
+                return {}
+
+    def _load_parent_context_map(self, run_id: str) -> dict[str, dict[str, str]]:
+        with SessionLocal() as session:
+            posts = session.scalars(select(CrawledPost).where(CrawledPost.run_id == run_id)).all()
+        context_map: dict[str, dict[str, str]] = {}
+        for post in posts:
+            payload = {"content": post.content_masked or post.content, "status": post.pre_ai_status or "ACCEPTED"}
+            context_map[post.post_id] = payload
+            if post.source_url:
+                context_map[post.source_url] = payload
+        return context_map
+
+    def _allows_uncertain(self) -> bool:
+        return str(getattr(self._settings, "pre_ai_mode", "strict")).lower() == "balanced"
 
     def _build_run_scoped_post_id(self, session: Any, run_id: str, post_id: str) -> str:
         run_suffix = run_id.removeprefix("run-")[:10]

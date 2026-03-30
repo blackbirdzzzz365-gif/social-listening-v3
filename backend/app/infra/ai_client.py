@@ -17,6 +17,30 @@ class MarketplaceTimeoutError(TimeoutError):
     pass
 
 
+class ProviderExecutionError(RuntimeError):
+    pass
+
+
+class ProviderTimeoutError(ProviderExecutionError):
+    pass
+
+
+class ProviderTransportError(ProviderExecutionError):
+    pass
+
+
+class ProviderRateLimitError(ProviderExecutionError):
+    pass
+
+
+class ProviderServerError(ProviderExecutionError):
+    pass
+
+
+class ProviderEnvelopeError(ProviderExecutionError):
+    pass
+
+
 class AIClient:
     def __init__(self, settings: Settings) -> None:
         self._marketplace_api_key = settings.openai_compatible_api_key.strip()
@@ -24,6 +48,7 @@ class AIClient:
         self._marketplace_timeout_sec = max(1.0, float(settings.openai_compatible_timeout_sec))
         self._fallback_model = settings.anthropic_fallback_model
         self._anthropic_api_key = settings.anthropic_api_key.strip()
+        self._retry_count = max(0, int(settings.ai_provider_retry_count))
         self._anthropic_client = (
             anthropic.AsyncAnthropic(api_key=self._anthropic_api_key) if self._anthropic_api_key else None
         )
@@ -38,7 +63,7 @@ class AIClient:
         thinking: bool = False,
     ) -> dict[str, Any]:
         try:
-            content = await self._request_text(
+            content, provider_meta = await self._request_text(
                 model=model,
                 system_prompt=system_prompt,
                 user_input=user_input,
@@ -46,14 +71,28 @@ class AIClient:
                 stream=stream,
             )
         except RuntimeError:
-            return self._mock_response(system_prompt=system_prompt, user_input=user_input)
+            response = self._mock_response(system_prompt=system_prompt, user_input=user_input)
+            response["_provider_meta"] = {
+                "provider_used": "mock",
+                "fallback_used": False,
+                "primary_model": model,
+                "fallback_model": self._fallback_model,
+                "attempt_count": 0,
+                "failure_reason": "no_provider_configured",
+            }
+            return response
 
         try:
-            return self._parse_json_response(content)
+            parsed = self._parse_json_response(content)
+            parsed["_provider_meta"] = provider_meta
+            return parsed
         except ValueError as parse_error:
-            repaired = await self._repair_json_response(model=model, malformed_content=content)
+            repaired, repair_meta = await self._repair_json_response(model=model, malformed_content=content)
             try:
-                return self._parse_json_response(repaired)
+                parsed = self._parse_json_response(repaired)
+                repair_meta["repair_used"] = True
+                parsed["_provider_meta"] = repair_meta
+                return parsed
             except ValueError as repair_error:
                 raise ValueError(str(repair_error)) from parse_error
 
@@ -65,34 +104,67 @@ class AIClient:
         user_input: str,
         thinking: bool,
         stream: bool,
-    ) -> str:
+    ) -> tuple[str, dict[str, Any]]:
         if self._marketplace_api_key:
-            try:
-                return await self._request_marketplace_text(
-                    model=model,
-                    system_prompt=system_prompt,
-                    user_input=user_input,
-                    stream=stream,
-                )
-            except MarketplaceTimeoutError:
-                if self._anthropic_client is not None:
-                    return await self._request_anthropic_text(
-                        model=self._fallback_model,
+            primary_attempts = 0
+            last_error: Exception | None = None
+            for primary_attempts in range(1, self._retry_count + 2):
+                try:
+                    text = await self._request_marketplace_text(
+                        model=model,
                         system_prompt=system_prompt,
                         user_input=user_input,
-                        thinking=thinking,
                         stream=stream,
                     )
-                raise
+                    return text, {
+                        "provider_used": "chiasegpu",
+                        "fallback_used": False,
+                        "primary_model": model,
+                        "fallback_model": self._fallback_model,
+                        "attempt_count": primary_attempts,
+                        "failure_reason": None,
+                    }
+                except ProviderExecutionError as exc:
+                    last_error = exc
+                    if primary_attempts <= self._retry_count and self._should_retry(exc):
+                        continue
+                    break
+
+            if last_error is not None and self._should_failover(last_error) and self._anthropic_client is not None:
+                text = await self._request_anthropic_text(
+                    model=self._fallback_model,
+                    system_prompt=system_prompt,
+                    user_input=user_input,
+                    thinking=thinking,
+                    stream=stream,
+                )
+                return text, {
+                    "provider_used": "anthropic",
+                    "fallback_used": True,
+                    "primary_model": model,
+                    "fallback_model": self._fallback_model,
+                    "attempt_count": primary_attempts + 1,
+                    "failure_reason": last_error.__class__.__name__,
+                }
+            if last_error is not None:
+                raise last_error
 
         if self._anthropic_client is not None:
-            return await self._request_anthropic_text(
+            text = await self._request_anthropic_text(
                 model=self._fallback_model,
                 system_prompt=system_prompt,
                 user_input=user_input,
                 thinking=thinking,
                 stream=stream,
             )
+            return text, {
+                "provider_used": "anthropic",
+                "fallback_used": False,
+                "primary_model": model,
+                "fallback_model": self._fallback_model,
+                "attempt_count": 1,
+                "failure_reason": None,
+            }
 
         raise RuntimeError("No AI providers configured")
 
@@ -115,13 +187,16 @@ class AIClient:
             "stream": False,
         }
         raw_response = await asyncio.to_thread(self._post_marketplace_completion, payload)
-        parsed = json.loads(raw_response)
+        try:
+            parsed = json.loads(raw_response)
+        except json.JSONDecodeError as exc:
+            raise ProviderEnvelopeError("Marketplace response was not valid JSON") from exc
         choices = parsed.get("choices")
         if not isinstance(choices, list) or not choices:
-            raise ValueError("Marketplace response did not include choices")
+            raise ProviderEnvelopeError("Marketplace response did not include choices")
         message = choices[0].get("message") if isinstance(choices[0], dict) else None
         if not isinstance(message, dict):
-            raise ValueError("Marketplace response did not include a message")
+            raise ProviderEnvelopeError("Marketplace response did not include a message")
         content = message.get("content")
         if isinstance(content, str):
             return content
@@ -132,7 +207,7 @@ class AIClient:
                     parts.append(str(item.get("text") or ""))
             if parts:
                 return "\n".join(parts)
-        raise ValueError("Marketplace response did not include text content")
+        raise ProviderEnvelopeError("Marketplace response did not include text content")
 
     def _post_marketplace_completion(self, payload: dict[str, Any]) -> str:
         request = urllib_request.Request(
@@ -147,14 +222,20 @@ class AIClient:
         try:
             with urllib_request.urlopen(request, timeout=self._marketplace_timeout_sec) as response:
                 return response.read().decode("utf-8")
+        except urllib_error.HTTPError as exc:
+            if exc.code == 429:
+                raise ProviderRateLimitError("Marketplace rate limited") from exc
+            if exc.code >= 500:
+                raise ProviderServerError(f"Marketplace server error: {exc.code}") from exc
+            raise
         except urllib_error.URLError as exc:
             if self._is_timeout_error(exc.reason):
-                raise MarketplaceTimeoutError("Marketplace request timed out") from exc
-            raise
+                raise ProviderTimeoutError("Marketplace request timed out") from exc
+            raise ProviderTransportError("Marketplace transport failure") from exc
         except socket.timeout as exc:
-            raise MarketplaceTimeoutError("Marketplace request timed out") from exc
+            raise ProviderTimeoutError("Marketplace request timed out") from exc
         except TimeoutError as exc:
-            raise MarketplaceTimeoutError("Marketplace request timed out") from exc
+            raise ProviderTimeoutError("Marketplace request timed out") from exc
 
     def _is_timeout_error(self, error: object) -> bool:
         if isinstance(error, (TimeoutError, socket.timeout)):
@@ -195,7 +276,7 @@ class AIClient:
         text_blocks = [block.text for block in message.content if getattr(block, "type", "") == "text"]
         return "\n".join(text_blocks)
 
-    async def _repair_json_response(self, *, model: str, malformed_content: str) -> str:
+    async def _repair_json_response(self, *, model: str, malformed_content: str) -> tuple[str, dict[str, Any]]:
         repair_prompt = (
             "JSON_REPAIR\n"
             "You convert malformed JSON-like output into one strict JSON object.\n"
@@ -212,6 +293,12 @@ class AIClient:
             thinking=False,
             stream=False,
         )
+
+    def _should_retry(self, exc: Exception) -> bool:
+        return isinstance(exc, (ProviderTimeoutError, ProviderTransportError, ProviderRateLimitError, ProviderServerError, ProviderEnvelopeError))
+
+    def _should_failover(self, exc: Exception) -> bool:
+        return self._should_retry(exc)
 
     def _mock_response(self, *, system_prompt: str, user_input: str) -> dict[str, Any]:
         if "KEYWORD_ANALYSIS" in system_prompt:

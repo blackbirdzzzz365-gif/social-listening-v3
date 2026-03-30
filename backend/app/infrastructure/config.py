@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     openai_compatible_timeout_sec: float = 25.0
     anthropic_api_key: str = ""
     anthropic_fallback_model: str = "claude-haiku-4-5"
+    ai_provider_retry_count: int = 1
     keyword_analysis_model: str = "gpt-4o"
     keyword_analysis_thinking: bool = False
     plan_generation_model: str = "gpt-4o"
@@ -43,6 +44,15 @@ class Settings(BaseSettings):
     content_labeling_model: str = "gpt-4o"
     label_taxonomy_version: str = "v1"
     label_batch_size: int = 20
+    retrieval_batch_size: int = 20
+    retrieval_continue_accepted_ratio: float = 0.25
+    retrieval_weak_accepted_ratio: float = 0.10
+    retrieval_weak_uncertain_ratio: float = 0.20
+    retrieval_strong_accept_count: int = 3
+    retrieval_max_consecutive_weak_batches: int = 2
+    retrieval_min_accepted_per_path: int = 3
+    retrieval_max_scanned_per_path: int = 60
+    pre_ai_mode: str = "strict"
 
     model_config = SettingsConfigDict(
         env_file=".env",

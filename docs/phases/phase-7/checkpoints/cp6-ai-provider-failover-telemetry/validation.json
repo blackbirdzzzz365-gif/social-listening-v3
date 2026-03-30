@@ -1,0 +1,11 @@
+{
+  "cp": "cp6-ai-provider-failover-telemetry",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "",
+  "summary": "",
+  "checks": [],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp7-phase7-smoke-audit"
+}

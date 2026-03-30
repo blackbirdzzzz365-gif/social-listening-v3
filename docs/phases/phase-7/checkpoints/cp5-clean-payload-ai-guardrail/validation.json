@@ -1,0 +1,11 @@
+{
+  "cp": "cp5-clean-payload-ai-guardrail",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "",
+  "summary": "",
+  "checks": [],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp6-ai-provider-failover-telemetry"
+}

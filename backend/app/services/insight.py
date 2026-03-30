@@ -99,6 +99,10 @@ class InsightService:
         excluded_ids: set[str] = set()
         excluded_breakdown: dict[str, int] = {}
         for post in posts:
+            if not self._is_theme_eligible(post):
+                excluded_ids.add(post.post_id)
+                excluded_breakdown["pre_ai_rejected"] = excluded_breakdown.get("pre_ai_rejected", 0) + 1
+                continue
             label = labels.get(post.current_label_id or "")
             include, reason = self._policy.include(audience_filter, label)
             if not include:
@@ -108,6 +112,16 @@ class InsightService:
                 continue
             clean_posts.append(post)
         return clean_posts, excluded_ids, excluded_breakdown
+
+    def _is_theme_eligible(self, post: CrawledPost) -> bool:
+        status = (post.pre_ai_status or "").upper()
+        if not status:
+            return True
+        if status == "ACCEPTED":
+            return True
+        if status == "UNCERTAIN":
+            return self._settings.pre_ai_mode.lower() == "balanced"
+        return False
 
     def _build_response(
         self,
