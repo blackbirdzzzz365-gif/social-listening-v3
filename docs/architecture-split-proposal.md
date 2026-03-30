@@ -17,8 +17,8 @@ Thay vao do, he thong chay theo mo hinh:
 - 1 Docker app duy nhat
 - Cloudflare lo DNS + SSL + Tunnel
 - 2 hostname public di vao 2 cong trong container:
-  - `app.blackbirdzzzz.art` -> `localhost:8000`
-  - `browser.blackbirdzzzz.art` -> `localhost:6080`
+  - `social-listening-v3.blackbirdzzzz.art` -> `localhost:8000`
+  - `live-browser.blackbirdzzzz.art` -> `localhost:6080`
 
 Muc tieu cua phuong an nay la:
 
@@ -58,8 +58,8 @@ VM ChiaseGPU
 
 | Public URL | Target trong VM | Muc dich |
 |------------|-----------------|----------|
-| `https://app.blackbirdzzzz.art` | `http://localhost:8000` | App UI + API |
-| `https://browser.blackbirdzzzz.art` | `http://localhost:6080` | noVNC browser view |
+| `https://social-listening-v3.blackbirdzzzz.art` | `http://localhost:8000` | App UI + API |
+| `https://live-browser.blackbirdzzzz.art` | `http://localhost:6080` | noVNC browser view |
 
 ---
 
@@ -154,7 +154,7 @@ Phuong an chot tu support la hop ly, nhung can them 2 luu y de tai lieu dung voi
 
 ### 6.1 Browser hostname khong nen de mo hoan toan
 
-`browser.blackbirdzzzz.art` la man hinh browser Facebook co the tuong tac duoc.
+`live-browser.blackbirdzzzz.art` la man hinh browser Facebook co the tuong tac duoc.
 
 Neu de public hoan toan thi rui ro rat cao:
 
@@ -164,8 +164,8 @@ Neu de public hoan toan thi rui ro rat cao:
 
 **Khuyen nghi production:**
 
-- `app.blackbirdzzzz.art`: co the public binh thuong
-- `browser.blackbirdzzzz.art`: nen dat sau **Cloudflare Access**
+- `social-listening-v3.blackbirdzzzz.art`: co the public binh thuong
+- `live-browser.blackbirdzzzz.art`: nen dat sau **Cloudflare Access**
 - repo khong bundle CA noi bo cua to chuc; trust store dac thu, neu can, phai duoc xu ly o cap VM/mang thay vi commit vao app
 
 Neu chua bat Access ngay, it nhat phai co:
@@ -298,8 +298,8 @@ curl -s http://localhost:8000/api/browser/status
 **Validate sau khi tao**
 
 ```bash
-curl -I https://app.blackbirdzzzz.art
-curl -I https://browser.blackbirdzzzz.art/vnc.html
+curl -I https://social-listening-v3.blackbirdzzzz.art
+curl -I https://live-browser.blackbirdzzzz.art/vnc.html
 ```
 
 **PASS**
@@ -308,7 +308,7 @@ curl -I https://browser.blackbirdzzzz.art/vnc.html
 - noVNC mo duoc tu internet
 
 **Production-hardening**
-- Bat Cloudflare Access cho `browser.blackbirdzzzz.art`
+- Bat Cloudflare Access cho `live-browser.blackbirdzzzz.art`
 - Test lai browser URL sau khi policy duoc ap
 
 ### CP-8: Anthropic API key
@@ -322,7 +322,7 @@ docker exec social-listening-v3 sh -lc 'test -n "$ANTHROPIC_API_KEY" && echo SET
 **Validate key goi duoc flow that**
 
 ```bash
-curl -s -X POST https://app.blackbirdzzzz.art/api/sessions \
+curl -s -X POST https://social-listening-v3.blackbirdzzzz.art/api/sessions \
   -H 'Content-Type: application/json' \
   -d '{"topic":"phan hoi khach hang ve the tin dung TPBank EVO"}'
 ```
@@ -335,7 +335,7 @@ curl -s -X POST https://app.blackbirdzzzz.art/api/sessions \
 Neu muon validate sau hon:
 
 ```bash
-python backend/tests/e2e_smoke.py --base-url https://app.blackbirdzzzz.art
+python backend/tests/e2e_smoke.py --base-url https://social-listening-v3.blackbirdzzzz.art
 ```
 
 Luu y: e2e smoke day du chi pass khi Facebook session da `VALID`.
@@ -344,8 +344,8 @@ Luu y: e2e smoke day du chi pass khi Facebook session da `VALID`.
 
 **Bai test tren dien thoai**
 
-1. Mo `https://app.blackbirdzzzz.art`
-2. Mo `https://browser.blackbirdzzzz.art/vnc.html`
+1. Mo `https://social-listening-v3.blackbirdzzzz.art`
+2. Mo `https://live-browser.blackbirdzzzz.art/vnc.html`
 3. Tren app, trigger browser setup
 4. Dang nhap Facebook trong noVNC
 5. Quay lai app va check session status
@@ -353,8 +353,8 @@ Luu y: e2e smoke day du chi pass khi Facebook session da `VALID`.
 **API check sau login**
 
 ```bash
-curl -s https://app.blackbirdzzzz.art/api/browser/status
-curl -s https://app.blackbirdzzzz.art/api/health/status
+curl -s https://social-listening-v3.blackbirdzzzz.art/api/browser/status
+curl -s https://social-listening-v3.blackbirdzzzz.art/api/health/status
 ```
 
 **PASS**
@@ -365,7 +365,7 @@ curl -s https://app.blackbirdzzzz.art/api/health/status
 **Smoke test sau login**
 
 ```bash
-python backend/tests/e2e_smoke.py --base-url https://app.blackbirdzzzz.art
+python backend/tests/e2e_smoke.py --base-url https://social-listening-v3.blackbirdzzzz.art
 ```
 
 **PASS**
@@ -381,9 +381,9 @@ Thu tu khuyen nghi:
 
 1. Xac nhan local app tren VM da xanh (`localhost:8000`, `localhost:6080`)
 2. Xac nhan tunnel connected
-3. Tao `app.blackbirdzzzz.art`
+3. Tao `social-listening-v3.blackbirdzzzz.art`
 4. Test `app` public truoc
-5. Tao `browser.blackbirdzzzz.art`
+5. Tao `live-browser.blackbirdzzzz.art`
 6. Bat Access cho `browser` neu co the
 7. Dien API key
 8. Test planner flow
@@ -398,8 +398,8 @@ Ly do: neu public hostname chua dung ma da doi sang test mobile ngay, rat de nha
 
 Chi nen xem la san sang go-live khi tat ca dieu sau deu dung:
 
-- `https://app.blackbirdzzzz.art` mo duoc tren mobile
-- `https://browser.blackbirdzzzz.art/vnc.html` mo duoc tren mobile
+- `https://social-listening-v3.blackbirdzzzz.art` mo duoc tren mobile
+- `https://live-browser.blackbirdzzzz.art/vnc.html` mo duoc tren mobile
 - Browser hostname da co lop bao ve phu hop
 - `ANTHROPIC_API_KEY` da duoc load va goi duoc
 - Facebook login session chuyen sang `VALID`

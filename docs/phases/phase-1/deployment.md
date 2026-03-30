@@ -16,8 +16,8 @@ Tai lieu nay mo ta cach deploy he thong len production theo phuong an da chot:
 - 1 container Docker cho app
 - Cloudflare Tunnel de expose app va noVNC
 - 2 public URLs:
-  - `https://app.blackbirdzzzz.art`
-  - `https://browser.blackbirdzzzz.art/vnc.html`
+  - `https://social-listening-v3.blackbirdzzzz.art`
+  - `https://live-browser.blackbirdzzzz.art/vnc.html`
 
 Day la deployment nhanh, gon, va phu hop nhat voi codebase hien tai.
 
@@ -51,8 +51,8 @@ VM
 
 | Public URL | Internal target |
 |------------|-----------------|
-| `app.blackbirdzzzz.art` | `http://localhost:8000` |
-| `browser.blackbirdzzzz.art` | `http://localhost:6080` |
+| `social-listening-v3.blackbirdzzzz.art` | `http://localhost:8000` |
+| `live-browser.blackbirdzzzz.art` | `http://localhost:6080` |
 
 ---
 
@@ -182,7 +182,7 @@ Tao 2 hostname:
 
 Khuyen nghi:
 
-- Dat `browser.blackbirdzzzz.art` sau Cloudflare Access
+- Dat `live-browser.blackbirdzzzz.art` sau Cloudflare Access
 - Neu chua bat Access, it nhat phai co `VNC_PASSWORD`
 
 ---
@@ -192,8 +192,8 @@ Khuyen nghi:
 Sau khi tao public hostname:
 
 ```bash
-curl -I https://app.blackbirdzzzz.art
-curl -I https://browser.blackbirdzzzz.art/vnc.html
+curl -I https://social-listening-v3.blackbirdzzzz.art
+curl -I https://live-browser.blackbirdzzzz.art/vnc.html
 ```
 
 **Expected**
@@ -215,7 +215,7 @@ docker exec social-listening-v3 sh -lc 'test -n "$ANTHROPIC_API_KEY" && echo SET
 Kiem tra key goi duoc flow that:
 
 ```bash
-curl -s -X POST https://app.blackbirdzzzz.art/api/sessions \
+curl -s -X POST https://social-listening-v3.blackbirdzzzz.art/api/sessions \
   -H 'Content-Type: application/json' \
   -d '{"topic":"phan hoi khach hang ve the tin dung TPBank EVO"}'
 ```
@@ -230,17 +230,17 @@ curl -s -X POST https://app.blackbirdzzzz.art/api/sessions \
 
 ## 10. Dang nhap Facebook qua noVNC
 
-1. Mo `https://app.blackbirdzzzz.art`
+1. Mo `https://social-listening-v3.blackbirdzzzz.art`
 2. Trigger browser setup tren app
-3. Mo `https://browser.blackbirdzzzz.art/vnc.html`
+3. Mo `https://live-browser.blackbirdzzzz.art/vnc.html`
 4. Dang nhap Facebook
 5. Quay lai app va check session
 
 Kiem tra bang API:
 
 ```bash
-curl -s https://app.blackbirdzzzz.art/api/browser/status
-curl -s https://app.blackbirdzzzz.art/api/health/status
+curl -s https://social-listening-v3.blackbirdzzzz.art/api/browser/status
+curl -s https://social-listening-v3.blackbirdzzzz.art/api/health/status
 ```
 
 **Expected**
@@ -256,13 +256,13 @@ curl -s https://app.blackbirdzzzz.art/api/health/status
 Khi browser session da `VALID`, chay:
 
 ```bash
-python backend/tests/e2e_smoke.py --base-url https://app.blackbirdzzzz.art
+python backend/tests/e2e_smoke.py --base-url https://social-listening-v3.blackbirdzzzz.art
 ```
 
 Neu da co `run_id` thuc te va muon test labeling:
 
 ```bash
-python backend/tests/labeling_smoke.py --base-url https://app.blackbirdzzzz.art --run-id <run_id>
+python backend/tests/labeling_smoke.py --base-url https://social-listening-v3.blackbirdzzzz.art --run-id <run_id>
 ```
 
 ---
@@ -306,8 +306,8 @@ sudo journalctl -u cloudflared -n 50 --no-pager
 
 Chi nen xem la production-ready khi tat ca dieu sau deu dung:
 
-- `https://app.blackbirdzzzz.art` mo duoc
-- `https://browser.blackbirdzzzz.art/vnc.html` mo duoc
+- `https://social-listening-v3.blackbirdzzzz.art` mo duoc
+- `https://live-browser.blackbirdzzzz.art/vnc.html` mo duoc
 - Browser hostname da co bao ve phu hop
 - `ANTHROPIC_API_KEY` da duoc load va goi duoc
 - Facebook session da `VALID`

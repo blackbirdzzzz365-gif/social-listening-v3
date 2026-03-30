@@ -17,19 +17,19 @@ cloudflared tunnel list
 
 ### 2. Public hostnames
 
-- [ ] `app.blackbirdzzzz.art` -> `http://localhost:8000`
-- [ ] `browser.blackbirdzzzz.art` -> `http://localhost:6080`
+- [ ] `social-listening-v3.blackbirdzzzz.art` -> `http://localhost:8000`
+- [ ] `live-browser.blackbirdzzzz.art` -> `http://localhost:6080`
 
 Validate:
 
 ```bash
-curl -I https://app.blackbirdzzzz.art
-curl -I https://browser.blackbirdzzzz.art/vnc.html
+curl -I https://social-listening-v3.blackbirdzzzz.art
+curl -I https://live-browser.blackbirdzzzz.art/vnc.html
 ```
 
 ### 3. Access policy
 
-- [ ] `browser.blackbirdzzzz.art` da co Cloudflare Access policy hoac co co che bao ve thay the
+- [ ] `live-browser.blackbirdzzzz.art` da co Cloudflare Access policy hoac co co che bao ve thay the
 
 ---
 
@@ -119,22 +119,22 @@ curl -I http://localhost:6080/vnc.html
 
 ### 10. App public
 
-- [ ] `https://app.blackbirdzzzz.art` mo duoc
+- [ ] `https://social-listening-v3.blackbirdzzzz.art` mo duoc
 
 Validate:
 
 ```bash
-curl -I https://app.blackbirdzzzz.art
+curl -I https://social-listening-v3.blackbirdzzzz.art
 ```
 
 ### 11. Browser public
 
-- [ ] `https://browser.blackbirdzzzz.art/vnc.html` mo duoc
+- [ ] `https://live-browser.blackbirdzzzz.art/vnc.html` mo duoc
 
 Validate:
 
 ```bash
-curl -I https://browser.blackbirdzzzz.art/vnc.html
+curl -I https://live-browser.blackbirdzzzz.art/vnc.html
 ```
 
 ---
@@ -149,7 +149,7 @@ curl -I https://browser.blackbirdzzzz.art/vnc.html
 Validate:
 
 ```bash
-curl -s -X POST https://app.blackbirdzzzz.art/api/sessions \
+curl -s -X POST https://social-listening-v3.blackbirdzzzz.art/api/sessions \
   -H 'Content-Type: application/json' \
   -d '{"topic":"phan hoi khach hang ve the tin dung TPBank EVO"}'
 ```
@@ -163,8 +163,8 @@ curl -s -X POST https://app.blackbirdzzzz.art/api/sessions \
 Validate:
 
 ```bash
-curl -s https://app.blackbirdzzzz.art/api/browser/status
-curl -s https://app.blackbirdzzzz.art/api/health/status
+curl -s https://social-listening-v3.blackbirdzzzz.art/api/browser/status
+curl -s https://social-listening-v3.blackbirdzzzz.art/api/health/status
 ```
 
 ### 14. E2E smoke
@@ -174,7 +174,7 @@ curl -s https://app.blackbirdzzzz.art/api/health/status
 Validate:
 
 ```bash
-python backend/tests/e2e_smoke.py --base-url https://app.blackbirdzzzz.art
+python backend/tests/e2e_smoke.py --base-url https://social-listening-v3.blackbirdzzzz.art
 ```
 
 ---
