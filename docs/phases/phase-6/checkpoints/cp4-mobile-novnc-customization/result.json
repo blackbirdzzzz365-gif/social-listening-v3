@@ -1,0 +1,31 @@
+{
+  "cp": "cp4-mobile-novnc-customization",
+  "role": "implementer",
+  "status": "READY",
+  "timestamp": "2026-03-30T15:39:58+0700",
+  "summary": "A dedicated mobile noVNC surface has been added with project-owned defaults, an injected quickbar, and touch-oriented control affordances layered on top of upstream noVNC.",
+  "artifacts": [
+    {
+      "file": "browser_web/defaults.json",
+      "action": "created"
+    },
+    {
+      "file": "browser_web/mandatory.json",
+      "action": "created"
+    },
+    {
+      "file": "browser_web/mobile-vnc.css",
+      "action": "created"
+    },
+    {
+      "file": "browser_web/mobile-vnc.js",
+      "action": "created"
+    },
+    {
+      "file": "entrypoint.sh",
+      "action": "modified"
+    }
+  ],
+  "issues": [],
+  "notes": "The customization keeps upstream `vnc.html` and `vnc_lite.html` available as fallbacks while adding a separate `mobile.html` surface."
+}

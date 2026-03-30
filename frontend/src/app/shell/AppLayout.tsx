@@ -27,8 +27,8 @@ export function AppLayout({
 
   return (
     <AppShell
-      header={{ height: 60 }}
-      padding="md"
+      header={{ height: { base: 118, sm: 84 } }}
+      padding={{ base: "xs", sm: "md" }}
       styles={{
         header: {
           backgroundColor: palette.panel,
@@ -49,7 +49,7 @@ export function AppLayout({
         />
       </AppShell.Header>
       <AppShell.Main>
-        <Container py="lg" size="lg">
+        <Container px={{ base: 0, xs: "xs", sm: "md" }} py={{ base: "md", sm: "lg" }} size="xl">
           {children}
         </Container>
       </AppShell.Main>

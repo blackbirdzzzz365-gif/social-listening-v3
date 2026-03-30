@@ -1,0 +1,7 @@
+{
+  "resize": "scale",
+  "path": "websockify",
+  "reconnect": true,
+  "reconnect_delay": 2500,
+  "show_dot": true
+}

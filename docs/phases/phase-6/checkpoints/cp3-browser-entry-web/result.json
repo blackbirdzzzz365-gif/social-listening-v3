@@ -1,0 +1,27 @@
+{
+  "cp": "cp3-browser-entry-web",
+  "role": "implementer",
+  "status": "READY",
+  "timestamp": "2026-03-30T15:39:58+0700",
+  "summary": "The browser host root has been replaced by a project-owned responsive landing page that guides users into the mobile browser surface or upstream fallbacks.",
+  "artifacts": [
+    {
+      "file": "browser_web/index.html",
+      "action": "created"
+    },
+    {
+      "file": "browser_web/browser.css",
+      "action": "created"
+    },
+    {
+      "file": "Dockerfile",
+      "action": "modified"
+    },
+    {
+      "file": "entrypoint.sh",
+      "action": "modified"
+    }
+  ],
+  "issues": [],
+  "notes": "The browser root remains a simple web entry page rather than a dashboard shell."
+}

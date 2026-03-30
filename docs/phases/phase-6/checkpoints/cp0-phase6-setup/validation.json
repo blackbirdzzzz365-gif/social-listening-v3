@@ -1,0 +1,25 @@
+{
+  "cp": "cp0-phase6-setup",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-03-30T15:39:58+0700",
+  "summary": "The Phase 6 docs now reflect the responsive-mobile-web scope, and the checkpoint system is scaffolded completely.",
+  "checks": [
+    {
+      "name": "CHECK-01: Phase 6 scope docs are rewritten",
+      "command": "rg -n 'responsive mobile web|manual Facebook login|noVNC' docs/phases/phase-6/{README.md,ba-problem-brief.md,user-stories.md,technical-solution.md}",
+      "expected": "Top-level Phase 6 docs reference responsive web scope and manual login only",
+      "actual": "All four top-level docs now anchor Phase 6 around responsive mobile web redesign and manual login.",
+      "passed": true
+    },
+    {
+      "name": "CHECK-02: Full checkpoint workspace exists",
+      "command": "find docs/phases/phase-6/checkpoints -maxdepth 2 -type f | sort",
+      "expected": "Config files, helper scripts, and CP0-CP5 folders exist",
+      "actual": "Checkpoint root contains config files, notify/post-status helpers, and CP0-CP5 folders with README/INSTRUCTIONS/CHECKLIST/result/validation files.",
+      "passed": true
+    }
+  ],
+  "issues": [],
+  "ready_for_next_cp": true
+}

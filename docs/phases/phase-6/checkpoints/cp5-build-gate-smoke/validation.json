@@ -1,0 +1,46 @@
+{
+  "cp": "cp5-build-gate-smoke",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-03-30T15:39:58+0700",
+  "summary": "Phase 6 implementation is complete for local validation: the frontend build passes, the compose image rebuilds successfully, the container is healthy, and both the main app and browser surfaces return the expected content.",
+  "checks": [
+    {
+      "name": "CHECK-01: Frontend build passes on final code",
+      "command": "cd frontend && npm run build",
+      "expected": "TypeScript and Vite build succeed",
+      "actual": "Frontend build succeeded and produced the final `index-DHcWTBea.js` and `index-bjpGm8Ch.css` bundles.",
+      "passed": true
+    },
+    {
+      "name": "CHECK-02: Docker compose rebuild succeeds on Phase 6 runtime",
+      "command": "docker compose up -d --build app",
+      "expected": "The app image rebuilds and the service restarts successfully",
+      "actual": "Compose rebuilt `social-listening-v3-app`, recreated the container, and started the updated runtime successfully.",
+      "passed": true
+    },
+    {
+      "name": "CHECK-03: Local runtime is healthy",
+      "command": "docker compose ps && curl -sS http://127.0.0.1:8000/health",
+      "expected": "Container healthy and health endpoint returns ok",
+      "actual": "Container is `healthy`, and `/health` returned `{\"status\":\"ok\",\"version\":\"0.1.0\"}`.",
+      "passed": true
+    },
+    {
+      "name": "CHECK-04: Browser root serves the responsive entry page",
+      "command": "curl -sS http://127.0.0.1:6080/ | sed -n '1,20p'",
+      "expected": "Browser root serves the project-owned landing page instead of a directory listing",
+      "actual": "Browser root now returns `Social Listening Browser` HTML with the responsive browser entry CTA set.",
+      "passed": true
+    },
+    {
+      "name": "CHECK-05: mobile noVNC route is reachable",
+      "command": "curl -sS 'http://127.0.0.1:6080/mobile.html?autoconnect=1' | rg -n 'mobile-vnc.css|mobile-vnc.js|Social Listening Browser'",
+      "expected": "mobile.html is served and includes the mobile overlay assets",
+      "actual": "mobile.html returned the customized noVNC page with the injected mobile assets and custom title.",
+      "passed": true
+    }
+  ],
+  "issues": [],
+  "ready_for_next_cp": false
+}

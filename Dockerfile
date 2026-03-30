@@ -1,3 +1,5 @@
+ARG CAMOUFOX_CACHE_IMAGE=camoufox-downloader
+
 FROM node:20-slim AS frontend-builder
 
 WORKDIR /build
@@ -5,6 +7,15 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit
 COPY frontend/ ./
 RUN npm run build
+
+FROM python:3.12-slim AS camoufox-downloader
+
+WORKDIR /tmp
+COPY backend/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m camoufox fetch
+
+FROM ${CAMOUFOX_CACHE_IMAGE} AS camoufox-cache
 
 FROM python:3.12-slim
 
@@ -16,6 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     x11vnc \
     novnc \
     websockify \
+    libnss3-tools \
     libgtk-3-0 \
     libdbus-glib-1-2 \
     libxt6 \
@@ -38,10 +50,11 @@ WORKDIR /app
 
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-RUN python -m camoufox fetch
+COPY --from=camoufox-cache /root/.cache/camoufox /root/.cache/camoufox
 
 COPY backend/ /app/
 COPY --from=frontend-builder /build/dist/ /app/static/
+COPY browser_web/ /app/browser-web/
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

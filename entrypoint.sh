@@ -43,9 +43,35 @@ NOVNC_PATH=$(find /usr/share -name "vnc.html" -path "*/novnc/*" 2>/dev/null | he
 if [ -z "${NOVNC_PATH:-}" ]; then
   NOVNC_PATH="/usr/share/novnc"
 fi
-websockify --web "$NOVNC_PATH" 6080 localhost:5900 >/tmp/websockify.log 2>&1 &
+
+CUSTOM_BROWSER_WEB="/tmp/social-listening-browser-web"
+rm -rf "$CUSTOM_BROWSER_WEB"
+mkdir -p "$CUSTOM_BROWSER_WEB"
+cp -R "$NOVNC_PATH"/. "$CUSTOM_BROWSER_WEB"/
+cp -R /app/browser-web/. "$CUSTOM_BROWSER_WEB"/
+
+if [ -f "$CUSTOM_BROWSER_WEB/vnc.html" ]; then
+  cp "$CUSTOM_BROWSER_WEB/vnc.html" "$CUSTOM_BROWSER_WEB/mobile.html"
+  CUSTOM_BROWSER_WEB="$CUSTOM_BROWSER_WEB" python3 - <<'PY'
+from pathlib import Path
+import os
+
+root = Path(os.environ["CUSTOM_BROWSER_WEB"])
+mobile = root / "mobile.html"
+content = mobile.read_text(encoding="utf-8")
+content = content.replace("<title>noVNC</title>", "<title>Social Listening Browser</title>", 1)
+injection = (
+    '    <link rel="stylesheet" href="mobile-vnc.css">\n'
+    '    <script type="module" src="mobile-vnc.js"></script>\n'
+)
+content = content.replace("</head>", f"{injection}</head>", 1)
+mobile.write_text(content, encoding="utf-8")
+PY
+fi
+
+websockify --web "$CUSTOM_BROWSER_WEB" 6080 localhost:5900 >/tmp/websockify.log 2>&1 &
 sleep 1
-echo "  noVNC available at http://localhost:6080/vnc.html"
+echo "  browser web available at http://localhost:6080/"
 
 echo "[4/5] Running database migrations..."
 cd /app

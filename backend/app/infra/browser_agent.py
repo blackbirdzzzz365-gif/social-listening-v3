@@ -5,11 +5,14 @@ import hashlib
 import hmac
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from camoufox.async_api import AsyncCamoufox
+from camoufox.addons import DefaultAddons
 
 from app.infra.event_bus import HealthSignal
 from app.infra.pii_masker import PIIMasker
@@ -53,6 +56,12 @@ class BrowserAgent:
         if self._settings.browser_mock_mode or self._browser is not None:
             return
 
+        self._prepare_profile_dir()
+
+        exclude_addons: list[DefaultAddons] = []
+        if not self._default_ubo_manifest_exists():
+            exclude_addons.append(DefaultAddons.UBO)
+
         self._browser_cm = AsyncCamoufox(
             headless=self._settings.camoufox_headless,
             geoip=True,
@@ -60,6 +69,7 @@ class BrowserAgent:
             persistent_context=True,
             user_data_dir=str(self._profile_dir),
             window=self._screen_size,
+            exclude_addons=exclude_addons,
         )
         self._browser = await self._browser_cm.__aenter__()
         self._page = await self._browser.new_page()
@@ -70,6 +80,78 @@ class BrowserAgent:
             }
         )
         await self._page.route("**/*", self._on_route)
+
+    def _prepare_profile_dir(self) -> None:
+        cleanup_targets = [
+            self._profile_dir / ".parentlock",
+            self._profile_dir / "lock",
+            self._profile_dir / "cert_override.txt",
+            self._profile_dir / "sessionCheckpoints.json",
+            self._profile_dir / "xulstore.json",
+        ]
+        for target in cleanup_targets:
+            if target.exists() or target.is_symlink():
+                target.unlink()
+
+        sessionstore_dir = self._profile_dir / "sessionstore-backups"
+        if sessionstore_dir.exists():
+            for child in sessionstore_dir.iterdir():
+                if child.is_file() or child.is_symlink():
+                    child.unlink()
+
+        user_js = self._profile_dir / "user.js"
+        user_js.write_text(
+            "\n".join(
+                [
+                    'user_pref("browser.bookmarks.restore_default_bookmarks", false);',
+                    'user_pref("browser.sessionstore.resume_from_crash", false);',
+                    'user_pref("browser.sessionstore.max_resumed_crashes", 0);',
+                    'user_pref("browser.startup.page", 0);',
+                    'user_pref("browser.toolbars.bookmarks.visibility", "never");',
+                    'user_pref("sidebar.backupState", "{\\"width\\":\\"\\",\\"command\\":\\"\\",\\"expanded\\":false,\\"hidden\\":true}");',
+                    'user_pref("layout.css.devPixelsPerPx", "0.95");',
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self._remove_legacy_local_certificates()
+
+    def _remove_legacy_local_certificates(self) -> None:
+        certutil_path = shutil.which("certutil")
+        cert_db = self._profile_dir / "cert9.db"
+        if not certutil_path or not cert_db.exists():
+            return
+
+        db_path = f"sql:{self._profile_dir}"
+        result = subprocess.run(
+            [certutil_path, "-L", "-d", db_path],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return
+
+        for line in result.stdout.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("Certificate Nickname") or stripped.startswith("--"):
+                continue
+            match = re.match(r"^(?P<nickname>.+?)\s+[A-Za-z,]+$", stripped)
+            if not match:
+                continue
+            nickname = match.group("nickname").strip()
+            if not nickname.startswith("local-"):
+                continue
+            subprocess.run(
+                [certutil_path, "-D", "-d", db_path, "-n", nickname],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+    def _default_ubo_manifest_exists(self) -> bool:
+        return Path("/root/.cache/camoufox/addons/UBO/manifest.json").exists()
 
     async def stop(self) -> None:
         if self._browser_cm is None:
@@ -602,17 +684,59 @@ class BrowserAgent:
     async def _open_login_form(self) -> None:
         assert self._page is not None
         for url in (
-            "https://www.facebook.com/login",
             "https://m.facebook.com/login",
             "https://mbasic.facebook.com/login",
+            "https://www.facebook.com/login",
         ):
-            await self._page.goto(url, wait_until="domcontentloaded")
+            try:
+                await self._page.goto(url, wait_until="domcontentloaded")
+            except Exception:
+                # Facebook may redirect between login surfaces while the page is stabilizing.
+                pass
+            try:
+                await self._page.keyboard.press("Escape")
+            except Exception:
+                pass
+            await self._dismiss_cookie_banner()
             email = self._page.locator('input[name="email"]')
             password = self._page.locator('input[name="pass"]')
-            if await email.count() and await password.count():
+            try:
+                await email.first.wait_for(state="visible", timeout=3000)
+                await password.first.wait_for(state="visible", timeout=3000)
                 await email.scroll_into_view_if_needed()
                 await email.focus()
                 return
+            except Exception:
+                continue
+
+    async def _dismiss_cookie_banner(self) -> None:
+        assert self._page is not None
+        selectors = [
+            '[aria-label="Từ chối cookie không bắt buộc"]',
+            'button:has-text("Từ chối cookie không bắt buộc")',
+            'div[role="button"]:has-text("Từ chối cookie không bắt buộc")',
+            '[aria-label="Reject optional cookies"]',
+            'button:has-text("Reject optional cookies")',
+            'div[role="button"]:has-text("Reject optional cookies")',
+            '[aria-label="Only allow essential cookies"]',
+            'button:has-text("Only allow essential cookies")',
+            'div[role="button"]:has-text("Only allow essential cookies")',
+            'button[aria-label="Close"]',
+            'div[aria-label="Close"][role="button"]',
+        ]
+        for _ in range(4):
+            for selector in selectors:
+                locator = self._page.locator(selector).first
+                if not await locator.count():
+                    continue
+                try:
+                    await locator.wait_for(state="visible", timeout=1000)
+                    await locator.click(timeout=2000, force=True)
+                    await asyncio.sleep(1)
+                    return
+                except Exception:
+                    continue
+            await asyncio.sleep(0.5)
 
     async def _is_group_accessible(self) -> bool:
         assert self._page is not None

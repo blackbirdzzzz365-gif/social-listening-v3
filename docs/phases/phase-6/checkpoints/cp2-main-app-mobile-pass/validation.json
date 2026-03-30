@@ -1,0 +1,32 @@
+{
+  "cp": "cp2-main-app-mobile-pass",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-03-30T15:39:58+0700",
+  "summary": "The app entry surface builds successfully with the new mobile-safe layout changes and now exposes browser-aware navigation from the main shell.",
+  "checks": [
+    {
+      "name": "CHECK-01: Workflow shell adds mobile section navigation",
+      "command": "rg -n 'workflow-setup|workflow-keywords|workflow-plan|workflow-approve|workflow-monitor|workflow-themes|Quick Jump' frontend/src/App.tsx",
+      "expected": "App shell exposes explicit workflow anchors and quick navigation for small viewports",
+      "actual": "App.tsx now defines workflow section ids and a Quick Jump card that scrolls to each workflow section.",
+      "passed": true
+    },
+    {
+      "name": "CHECK-02: Setup surface links to the browser web",
+      "command": "rg -n 'Mo Browser Web|getBrowserSurfaceUrl' frontend/src/pages/SetupPage.tsx frontend/src/lib/runtime.ts",
+      "expected": "Setup page contains an explicit browser-web CTA and runtime browser URL resolution",
+      "actual": "SetupPage now offers a Browser Web action, and runtime URL resolution maps app hosts to the browser surface host/port.",
+      "passed": true
+    },
+    {
+      "name": "CHECK-03: Frontend build passes after the mobile app pass",
+      "command": "cd frontend && npm run build",
+      "expected": "TypeScript and Vite build succeed",
+      "actual": "Frontend build succeeded and produced the refreshed `index-DHcWTBea.js` and `index-bjpGm8Ch.css` bundles.",
+      "passed": true
+    }
+  ],
+  "issues": [],
+  "ready_for_next_cp": true
+}

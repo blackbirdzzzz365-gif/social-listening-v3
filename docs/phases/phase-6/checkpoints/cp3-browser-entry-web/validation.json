@@ -1,0 +1,25 @@
+{
+  "cp": "cp3-browser-entry-web",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-03-30T15:39:58+0700",
+  "summary": "The browser entry web exists in the image and is served from the browser host root instead of the old raw directory listing.",
+  "checks": [
+    {
+      "name": "CHECK-01: Project-owned browser entry files exist",
+      "command": "find browser_web -maxdepth 1 -type f | sort",
+      "expected": "browser_web contains the landing page and supporting CSS/JSON assets",
+      "actual": "browser_web now contains index.html, browser.css, defaults.json, mandatory.json, mobile-vnc.css, and mobile-vnc.js.",
+      "passed": true
+    },
+    {
+      "name": "CHECK-02: Runtime wiring copies browser web assets into the image",
+      "command": "rg -n 'browser_web|CUSTOM_BROWSER_WEB|websockify --web' Dockerfile entrypoint.sh",
+      "expected": "Dockerfile copies browser_web and entrypoint serves the custom browser web root",
+      "actual": "Dockerfile copies /app/browser-web and entrypoint overlays it into a custom noVNC web root before starting websockify.",
+      "passed": true
+    }
+  ],
+  "issues": [],
+  "ready_for_next_cp": true
+}

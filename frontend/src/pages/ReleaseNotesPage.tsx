@@ -95,7 +95,7 @@ export function ReleaseNotesPage({ phaseId }: ReleaseNotesPageProps) {
   return (
     <Stack gap="lg">
       <Paper
-        p="xl"
+        p={{ base: "lg", sm: "xl" }}
         radius="xl"
         style={{
           background: colorScheme === "dark"
@@ -106,7 +106,7 @@ export function ReleaseNotesPage({ phaseId }: ReleaseNotesPageProps) {
         withBorder
       >
         <Stack gap="lg">
-          <Group justify="space-between" align="flex-start">
+          <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="lg">
             <Stack gap="md" maw={780}>
               <Badge radius="sm" size="lg" variant="light" w="fit-content">
                 {releaseNote.hero.eyebrow ?? "Release Notes"}
@@ -133,7 +133,7 @@ export function ReleaseNotesPage({ phaseId }: ReleaseNotesPageProps) {
                 ) : null}
               </Stack>
             </PageSection>
-          </Group>
+          </SimpleGrid>
 
           <Group gap="xs">
             {releaseNote.story_refs.map((storyRef) => (
@@ -184,17 +184,17 @@ export function ReleaseNotesPage({ phaseId }: ReleaseNotesPageProps) {
       </SimpleGrid>
 
       <PageSection>
-        <Group justify="space-between" align="center">
+        <Stack gap="md">
           <Stack gap={4}>
             <Text fw={700}>Ready to continue?</Text>
             <Text c="dimmed" size="sm">
               Release notes da duoc attach vao phase hien hanh. Ban co the quay lai workflow ngay bay gio.
             </Text>
           </Stack>
-          <Button component="a" href={releaseNote.cta.href || "#/"}>
+          <Button component="a" href={releaseNote.cta.href || "#/"} w={{ base: "100%", xs: "fit-content" }}>
             {releaseNote.cta.label || "Open workflow"}
           </Button>
-        </Group>
+        </Stack>
       </PageSection>
     </Stack>
   );

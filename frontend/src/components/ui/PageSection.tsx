@@ -4,12 +4,14 @@ import { semanticColors } from "../../theme/tokens";
 
 type PageSectionProps = {
   children: ReactNode;
+  sectionId?: string;
   p?: "xs" | "sm" | "md" | "lg" | "xl";
   withBorder?: boolean;
 };
 
 export function PageSection({
   children,
+  sectionId,
   p = "lg",
   withBorder = true,
 }: PageSectionProps) {
@@ -17,14 +19,17 @@ export function PageSection({
     getInitialValueInEffect: true,
   });
   const palette = colorScheme === "dark" ? semanticColors.dark : semanticColors.light;
+  const responsivePadding = p === "lg" ? { base: "md", sm: "lg" } : p === "xl" ? { base: "lg", sm: "xl" } : p;
 
   return (
     <Paper
+      className="sl-page-section"
       bg={palette.panel}
-      p={p}
+      id={sectionId}
+      p={responsivePadding}
       radius="lg"
       shadow="xs"
-      style={{ minHeight: "100%" }}
+      style={{ minHeight: "100%", overflowWrap: "anywhere" }}
       withBorder={withBorder}
     >
       <Stack gap="md">{children}</Stack>

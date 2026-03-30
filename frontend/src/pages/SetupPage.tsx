@@ -6,6 +6,7 @@ import { PageHeader } from "../components/ui/PageHeader";
 import { PageSection } from "../components/ui/PageSection";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { apiUrl } from "../lib/api";
+import { getBrowserSurfaceUrl } from "../lib/runtime";
 
 type BrowserStatus = {
   session_status: "NOT_SETUP" | "VALID" | "EXPIRED";
@@ -120,12 +121,22 @@ export function SetupPage() {
             <Button disabled={isConnecting} onClick={onConnect}>
               {isConnecting ? "Dang ket noi..." : "Ket noi Facebook"}
             </Button>
+            <Button component="a" href={getBrowserSurfaceUrl("/")} rel="noreferrer" target="_blank" variant="light">
+              Mo Browser Web
+            </Button>
           </ActionBar>
         ) : (
-          <KeyValueRow
-            label="Connected hash"
-            value={status.account_id_hash ? <Code>{status.account_id_hash}</Code> : <Code>unknown</Code>}
-          />
+          <Stack gap="sm">
+            <KeyValueRow
+              label="Connected hash"
+              value={status.account_id_hash ? <Code>{status.account_id_hash}</Code> : <Code>unknown</Code>}
+            />
+            <ActionBar>
+              <Button component="a" href={getBrowserSurfaceUrl("/")} rel="noreferrer" target="_blank" variant="light">
+                Mo Browser Web
+              </Button>
+            </ActionBar>
+          </Stack>
         )}
       </Stack>
     </PageSection>
