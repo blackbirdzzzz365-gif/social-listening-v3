@@ -1,0 +1,54 @@
+{
+  "pack_id": "phase9-production-smoke",
+  "defaults": {
+    "base_url": "http://127.0.0.1:18000",
+    "ssh_target": "chiasegpu-vm",
+    "container": "social-listening-v3",
+    "interval_sec": 300,
+    "report_root": "reports/production"
+  },
+  "cases": [
+    {
+      "id": "phase9-finance-trust-routing",
+      "mode": "live_api_flow",
+      "phase": "phase-9",
+      "topic": "suy nghĩ của khách hàng về vay nhanh tiền mặt qua FE Credit",
+      "focus": "FE Credit",
+      "timeframe": "Tap trung vao 6 thang gan nhat va cac bai co trai nghiem that ve phi, lai suat, bi lua, uy tin.",
+      "audience": "Tap trung vao feedback cua nguoi vay that, khong lay bai quang cao hoac bai tu nhan vien sales.",
+      "comparison_policy": "Neu co so sanh thi uu tien so sanh FE Credit voi app vay tien khac theo trai nghiem that.",
+      "vision_policy": "Neu post co screenshot hop dong, bang phi, lich su tru tien, hoac canh bao lua dao thi uu tien crawl va doc OCR.",
+      "expectation": [
+        "run duoc queue/anmit an toan neu co run khac",
+        "co accepted evidence va label -> answer closeout",
+        "query posture trust/fraud/complaint xuat hien som hon",
+        "co audit cho reformulated query neu path dau yeu"
+      ],
+      "success_signals": [
+        "completion_reason=ANSWER_READY hoac LABELS_READY_NO_ANSWER",
+        "khong co INFRA_BROWSER_BOOT_FAILURE",
+        "query_attempts co reason_cluster hoac reformulated_queries",
+        "theme_results > 0 neu accepted set du dieu kien"
+      ]
+    },
+    {
+      "id": "phase9-image-bearing-skincare",
+      "mode": "live_api_flow",
+      "phase": "phase-9",
+      "topic": "review mặt nạ ngũ hoa trước sau khi dùng",
+      "focus": "mặt nạ ngũ hoa",
+      "timeframe": "Tap trung vao 6 thang gan nhat, uu tien bai review co anh truoc sau, screenshot feedback, hoac hinh bao bi.",
+      "audience": "Tap trung vao nguoi dung da dung san pham that, loai bo bai ban hang, inbox, va bai affiliate.",
+      "comparison_policy": "Neu co so sanh thi uu tien trai nghiem that ve kich ung, mun, da nhay cam, hieu qua.",
+      "vision_policy": "Uu tien bai co image before-after, image OCR, screenshot feedback, hoac hinh bao bi co text.",
+      "expectation": [
+        "co it nhat mot path trigger image fallback neu production tim thay bai co hinh anh",
+        "neu khong tim thay, bao cao ro vision van chua duoc kich hoat tren production case nay"
+      ],
+      "success_signals": [
+        "judge_used_image_understanding > 0 hoac report neu khong co image-bearing evidence",
+        "accepted_with_image > 0 hoac ket luan ro rang vi sao chua dat"
+      ]
+    }
+  ]
+}

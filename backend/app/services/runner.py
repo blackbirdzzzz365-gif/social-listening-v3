@@ -11,13 +11,18 @@ from sqlalchemy import select
 
 from app.domain.action_registry import get_action_spec
 from app.infra.ai_client import AIClient
-from app.infra.browser_agent import BrowserAgent, RawPost
+from app.infra.browser_agent import BrowserAgent, BrowserStartupError, RawPost
 from app.infrastructure.database import SessionLocal
 from app.models.approval import ApprovalGrant
 from app.models.crawled_post import CrawledPost
 from app.models.plan import Plan, PlanStep
 from app.models.product_context import ProductContext
 from app.models.run import PlanRun, StepRun
+from app.services.browser_run_admission import (
+    BrowserRunAdmissionCancelled,
+    BrowserRunAdmissionPaused,
+    BrowserRunAdmissionService,
+)
 from app.services.health_monitor import HealthMonitorService, utc_now_iso
 from app.services.label_job_service import LabelJobService, NO_ELIGIBLE_RECORDS_STATUS
 from app.services.planner import get_public_step_id
@@ -42,14 +47,17 @@ class RunnerService:
         health_monitor: HealthMonitorService,
         ai_client: AIClient,
         label_job_service: LabelJobService | None = None,
+        browser_admission_service: BrowserRunAdmissionService | None = None,
         settings: Any | None = None,
     ) -> None:
         self._browser_agent = browser_agent
         self._health_monitor = health_monitor
         self._label_job_service = label_job_service
         self._settings = settings
+        self._browser_admission = browser_admission_service or BrowserRunAdmissionService()
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._controls: dict[str, RunControl] = {}
+        self._run_requires_browser: dict[str, bool] = {}
         self._subscribers: dict[str, list[asyncio.Queue[tuple[str, dict[str, Any]]]]] = {}
         self._history: dict[str, list[tuple[str, dict[str, Any]]]] = {}
         self._retrieval_profile_builder = RetrievalProfileBuilder()
@@ -84,14 +92,21 @@ class RunnerService:
             selected_steps = [step for step in db_steps if get_public_step_id(step.step_id) in approved_step_ids]
             if not selected_steps:
                 raise ValueError("no approved steps found")
+            requires_browser = any(self._step_requires_browser(step) for step in selected_steps)
+            initial_status = "RUNNING"
+            if requires_browser:
+                initial_status = await self._browser_admission.register(run_id)
 
             run = PlanRun(
                 run_id=run_id,
                 plan_id=plan_id,
                 plan_version=plan.version,
                 grant_id=grant_id,
-                status="RUNNING",
+                status=initial_status,
                 completion_reason=None,
+                failure_class=None,
+                answer_status=None,
+                answer_generated_at=None,
                 started_at=started_at,
                 total_records=0,
             )
@@ -111,7 +126,12 @@ class RunnerService:
             session.commit()
 
         self._controls[run_id] = RunControl()
-        await self._emit(run_id, "run_started", {"run_id": run_id, "plan_id": plan_id})
+        self._run_requires_browser[run_id] = requires_browser
+        await self._emit(
+            run_id,
+            "run_queued" if initial_status == "QUEUED" else "run_started",
+            {"run_id": run_id, "plan_id": plan_id, "status": initial_status},
+        )
         self._tasks[run_id] = asyncio.create_task(self._execute_run(run_id))
         return self.get_run(run_id)
 
@@ -130,6 +150,7 @@ class RunnerService:
                 run.completion_reason = None
                 session.add(run)
                 session.commit()
+        await self._browser_admission.notify()
         await self._emit(run_id, "run_paused", {"run_id": run_id})
         return self.get_run(run_id)
 
@@ -144,10 +165,12 @@ class RunnerService:
             if run is None:
                 raise ValueError("run not found")
             if run.status not in {"DONE", "FAILED", "CANCELLED"}:
-                run.status = "RUNNING"
+                snapshot = await self._browser_admission.snapshot()
+                run.status = "RUNNING" if snapshot.owner_run_id == run_id else "QUEUED"
                 run.completion_reason = None
                 session.add(run)
                 session.commit()
+        await self._browser_admission.notify()
         await self._emit(run_id, "run_resumed", {"run_id": run_id})
         return self.get_run(run_id)
 
@@ -167,6 +190,8 @@ class RunnerService:
                 run.ended_at = utc_now_iso()
                 session.add(run)
                 session.commit()
+        await self._browser_admission.cancel(run_id)
+        await self._browser_admission.notify()
         await self._emit(run_id, "run_cancelled", {"run_id": run_id})
         return self.get_run(run_id)
 
@@ -208,6 +233,9 @@ class RunnerService:
                 "plan_version": run.plan_version,
                 "status": run.status,
                 "completion_reason": run.completion_reason,
+                "failure_class": run.failure_class,
+                "answer_status": run.answer_status,
+                "answer_generated_at": run.answer_generated_at,
                 "started_at": run.started_at,
                 "ended_at": run.ended_at,
                 "total_records": run.total_records,
@@ -230,7 +258,12 @@ class RunnerService:
     async def _execute_run(self, run_id: str) -> None:
         control = self._controls[run_id]
         current_step_run_id: str | None = None
+        browser_slot_acquired = False
         try:
+            if self._run_requires_browser.get(run_id, True):
+                browser_slot_acquired = await self._await_browser_slot(run_id, control)
+                if not browser_slot_acquired:
+                    return
             while True:
                 await control.resume_event.wait()
                 if control.stop_requested:
@@ -255,17 +288,35 @@ class RunnerService:
             completion_reason = "COMPLETED"
             emitted_status = "DONE"
             label_summary: dict[str, Any] | None = None
+            closeout_summary: dict[str, Any] | None = None
             if self._label_job_service is not None:
                 label_summary = await self._label_job_service.ensure_job_for_run(run_id, auto_start=True)
                 if label_summary.get("status") == NO_ELIGIBLE_RECORDS_STATUS:
                     completion_reason = "NO_ELIGIBLE_RECORDS"
                     emitted_status = "DONE_NO_ELIGIBLE_RECORDS"
+                else:
+                    terminal = await self._label_job_service.wait_for_run(run_id)
+                    label_summary = terminal.get("label_summary")
+                    closeout_summary = terminal.get("closeout_summary")
+                    answer_status = (closeout_summary or {}).get("answer_status")
+                    if answer_status == "ANSWER_READY":
+                        completion_reason = "ANSWER_READY"
+                        emitted_status = "DONE_ANSWER_READY"
+                    elif answer_status == "NO_ANSWER_CONTENT":
+                        completion_reason = "LABELS_READY_NO_ANSWER"
+                        emitted_status = "DONE_NO_ANSWER_CONTENT"
+                    elif answer_status == "FAILED":
+                        completion_reason = "ANSWER_CLOSEOUT_FAILED"
+                        emitted_status = "DONE_CLOSEOUT_FAILED"
 
             with SessionLocal() as session:
                 run = session.get(PlanRun, run_id)
                 if run is not None and run.status != "CANCELLED":
                     run.status = "DONE"
                     run.completion_reason = completion_reason
+                    run.failure_class = None
+                    if completion_reason == "NO_ELIGIBLE_RECORDS":
+                        run.answer_status = NO_ELIGIBLE_RECORDS_STATUS
                     run.ended_at = utc_now_iso()
                     session.add(run)
                     session.commit()
@@ -277,14 +328,17 @@ class RunnerService:
                     "status": emitted_status,
                     "completion_reason": completion_reason,
                     "label_status": None if label_summary is None else label_summary.get("status"),
+                    "answer_status": None if closeout_summary is None else closeout_summary.get("answer_status"),
                 },
             )
         except Exception as exc:
+            completion_reason, failure_class = self._classify_failure(exc, current_step_run_id)
             with SessionLocal() as session:
                 run = session.get(PlanRun, run_id)
                 if run is not None:
                     run.status = "FAILED"
-                    run.completion_reason = "STEP_ERROR" if current_step_run_id else "POST_RUN_ERROR"
+                    run.completion_reason = completion_reason
+                    run.failure_class = failure_class
                     run.ended_at = utc_now_iso()
                     session.add(run)
                     if current_step_run_id:
@@ -299,7 +353,12 @@ class RunnerService:
                 await self._emit(
                     run_id,
                     "step_failed",
-                    {"run_id": run_id, "error": str(exc), "step_run_id": current_step_run_id},
+                    {
+                        "run_id": run_id,
+                        "error": str(exc),
+                        "step_run_id": current_step_run_id,
+                        "failure_class": failure_class,
+                    },
                 )
             await self._emit(
                 run_id,
@@ -307,9 +366,15 @@ class RunnerService:
                 {
                     "run_id": run_id,
                     "error": str(exc),
+                    "completion_reason": completion_reason,
+                    "failure_class": failure_class,
                     "failure_stage": "step" if current_step_run_id else "post_run",
                 },
             )
+        finally:
+            if browser_slot_acquired:
+                await self._browser_admission.release(run_id)
+            self._run_requires_browser.pop(run_id, None)
 
     def _load_next_step(self, run_id: str) -> tuple[StepRun, PlanStep] | None:
         with SessionLocal() as session:
@@ -359,6 +424,35 @@ class RunnerService:
             "step_started",
             {"run_id": run_id, "step_id": get_public_step_id(step.step_id), "action_type": step.action_type},
         )
+
+    async def _await_browser_slot(self, run_id: str, control: RunControl) -> bool:
+        while True:
+            if control.stop_requested:
+                await self._browser_admission.cancel(run_id)
+                return False
+            await control.resume_event.wait()
+            try:
+                await self._browser_admission.acquire(
+                    run_id,
+                    is_paused=lambda: control.pause_requested,
+                    should_cancel=lambda: control.stop_requested,
+                )
+                with SessionLocal() as session:
+                    run = session.get(PlanRun, run_id)
+                    if run is None or run.status == "CANCELLED":
+                        await self._browser_admission.release(run_id)
+                        return False
+                    run.status = "RUNNING"
+                    run.completion_reason = None
+                    run.failure_class = None
+                    session.add(run)
+                    session.commit()
+                await self._emit(run_id, "run_admitted", {"run_id": run_id, "status": "RUNNING"})
+                return True
+            except BrowserRunAdmissionPaused:
+                continue
+            except BrowserRunAdmissionCancelled:
+                return False
 
     async def _mark_step_done(self, run_id: str, step_run_id: str, result: dict[str, Any]) -> None:
         with SessionLocal() as session:
@@ -532,7 +626,8 @@ class RunnerService:
 
         if step.action_type == "SEARCH_POSTS":
             remaining = step.estimated_count or 10
-            queries = self._resolve_search_queries(run_id, step)
+            queries = list(self._resolve_search_queries(run_id, step))
+            seen_queries = {self._normalize_query_key(query) for query in queries}
             all_posts: list[RawPost] = []
             all_checkpoint_posts: list[dict[str, Any]] = []
             all_batch_summaries: list[dict[str, Any]] = []
@@ -542,7 +637,10 @@ class RunnerService:
             duplicate_count = 0
             accepted_total = 0
 
-            for query in queries:
+            query_index = 0
+            while query_index < len(queries):
+                query = queries[query_index]
+                query_index += 1
                 if remaining <= 0:
                     break
                 result = await self._browser_agent.search_posts(query, target_count=remaining)
@@ -587,9 +685,17 @@ class RunnerService:
                         "collected_count": len(result["posts"]),
                         "accepted_count": processed["accepted_count"],
                         "stop_reason": processed["stop_reason"],
+                        "reason_cluster": processed.get("reason_cluster"),
+                        "reformulated_queries": processed.get("reformulated_queries", []),
                         "used_reformulation": query != queries[0],
                     }
                 )
+                for reformulated_query in processed.get("reformulated_queries", []):
+                    normalized = self._normalize_query_key(reformulated_query)
+                    if normalized in seen_queries:
+                        continue
+                    seen_queries.add(normalized)
+                    queries.append(reformulated_query)
                 for group in result["discovered_groups"]:
                     if not any(existing.get("group_id") == group.get("group_id") for existing in discovered_groups):
                         discovered_groups.append(group)
@@ -666,7 +772,8 @@ class RunnerService:
 
         if step.action_type == "SEARCH_IN_GROUP":
             group_ids = self._resolve_discovered_group_ids(run_id, step)
-            queries = self._resolve_search_queries(run_id, step)
+            queries = list(self._resolve_search_queries(run_id, step))
+            seen_queries = {self._normalize_query_key(query) for query in queries}
             all_posts: list[RawPost] = []
             persisted_total = 0
             duplicate_total = 0
@@ -675,11 +782,16 @@ class RunnerService:
             query_attempts: list[dict[str, Any]] = []
             remaining = step.estimated_count or 10
             accepted_total = 0
-            for query in queries:
+            query_index = 0
+            while query_index < len(queries):
+                query = queries[query_index]
+                query_index += 1
                 query_accepted = 0
                 query_collected = 0
                 query_stop_reason: str | None = None
                 should_reformulate = False
+                reason_cluster: str | None = None
+                reformulated_queries: list[str] = []
                 for group_id in group_ids:
                     if remaining <= 0:
                         break
@@ -708,6 +820,8 @@ class RunnerService:
                     all_batch_summaries.extend(processed["batch_summaries"])
                     query_stop_reason = processed["stop_reason"]
                     should_reformulate = processed["should_reformulate"]
+                    reason_cluster = processed.get("reason_cluster")
+                    reformulated_queries = processed.get("reformulated_queries", [])
                     if accepted_total > 0 or should_reformulate:
                         break
                 query_attempts.append(
@@ -716,9 +830,17 @@ class RunnerService:
                         "collected_count": query_collected,
                         "accepted_count": query_accepted,
                         "stop_reason": query_stop_reason,
+                        "reason_cluster": reason_cluster,
+                        "reformulated_queries": reformulated_queries,
                         "used_reformulation": query != queries[0],
                     }
                 )
+                for reformulated_query in reformulated_queries:
+                    normalized = self._normalize_query_key(reformulated_query)
+                    if normalized in seen_queries:
+                        continue
+                    seen_queries.add(normalized)
+                    queries.append(reformulated_query)
                 if remaining <= 0 or accepted_total > 0 or not should_reformulate:
                     break
             return {
@@ -776,6 +898,27 @@ class RunnerService:
             if fallback:
                 group_ids.append(fallback)
         return self._dedupe_keep_order(group_ids)
+
+    def _step_requires_browser(self, step: PlanStep) -> bool:
+        return step.action_type in {
+            "SEARCH_GROUPS",
+            "JOIN_GROUP",
+            "CHECK_JOIN_STATUS",
+            "CRAWL_FEED",
+            "SEARCH_POSTS",
+            "CRAWL_COMMENTS",
+            "SEARCH_IN_GROUP",
+        }
+
+    def _classify_failure(self, exc: Exception, current_step_run_id: str | None) -> tuple[str, str]:
+        if isinstance(exc, BrowserStartupError):
+            return "INFRA_BROWSER_BOOT_FAILURE", "INFRA_BROWSER_BOOT_FAILURE"
+        if current_step_run_id:
+            return "STEP_ERROR", "STEP_EXECUTION_ERROR"
+        return "POST_RUN_ERROR", "POST_RUN_ERROR"
+
+    def _normalize_query_key(self, query: str) -> str:
+        return re.sub(r"\s+", " ", (query or "").strip().lower())
 
     def _resolve_private_group_ids(self, run_id: str, step: PlanStep) -> list[str]:
         payloads = self._get_step_payloads(run_id)
@@ -866,10 +1009,12 @@ class RunnerService:
     def _resolve_search_queries(self, run_id: str, step: PlanStep) -> list[str]:
         primary_query = self._resolve_search_query(step)
         profile = self._get_retrieval_profile_for_run(run_id)
+        validity_spec = self._get_validity_spec_for_run(run_id)
         max_variants = int(getattr(self._settings, "retrieval_max_query_variants", 2) or 2)
         return self._retrieval_profile_builder.suggest_queries(
             primary_query,
             profile,
+            validity_spec=validity_spec,
             max_variants=max_variants,
         )
 
@@ -1006,6 +1151,8 @@ class RunnerService:
         total_accepted = 0
         total_scanned = 0
         stop_reason: str | None = None
+        reason_cluster: str | None = None
+        reformulated_queries: list[str] = []
 
         for batch_index, start in enumerate(range(0, len(records), batch_size), start=1):
             raw_batch = records[start : start + batch_size]
@@ -1121,6 +1268,26 @@ class RunnerService:
                 batch_decision = "stop"
                 stop_reason = "min_accepts_not_reached"
 
+            if total_accepted == 0 and batch_decision in {"stop", "reformulate"}:
+                rejected_reason_codes = [
+                    reason_code
+                    for entry in scored_entries
+                    for reason_code in entry["judge_result"].reason_codes
+                    if entry["judge_result"].decision == "REJECTED"
+                ]
+                reason_cluster = self._retrieval_profile_builder.cluster_reject_reasons(
+                    rejected_reason_codes,
+                    query=query_text,
+                    validity_spec=validity_spec,
+                )
+                reformulated_queries = self._retrieval_profile_builder.build_reformulations(
+                    query_text,
+                    profile,
+                    validity_spec,
+                    reason_cluster,
+                    max_variants=max(1, int(getattr(self._settings, "retrieval_max_query_variants", 2) or 2)),
+                )
+
             persisted_count, duplicate_count, persisted_refs = self._persist_scored_posts(
                 run_id=run_id,
                 step_run_id=step_run_id,
@@ -1142,6 +1309,7 @@ class RunnerService:
                 **batch_health.as_dict(),
                 "batch_size": len(raw_batch),
                 "batch_decision": batch_decision,
+                "reason_cluster": reason_cluster if batch_decision in {"stop", "reformulate"} else None,
                 "stop_reason": stop_reason if batch_decision == "stop" else None,
             }
             batch_summaries.append(summary)
@@ -1159,6 +1327,8 @@ class RunnerService:
             "should_reformulate": total_accepted == 0
             and bool(batch_summaries)
             and batch_summaries[-1]["batch_decision"] in {"stop", "reformulate"},
+            "reason_cluster": reason_cluster,
+            "reformulated_queries": reformulated_queries,
             "stop_reason": stop_reason,
         }
 

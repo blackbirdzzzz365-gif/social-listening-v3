@@ -1,0 +1,15 @@
+{
+  "cp": "cp2-answer-closeout-orchestration",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-03-31T22:11:38+0700",
+  "summary": "Implemented run closeout orchestration so eligible runs continue from label completion into theme synthesis and publish answer_status back onto the run.",
+  "artifacts": [
+    "backend/app/services/run_closeout.py",
+    "backend/app/services/label_job_service.py",
+    "backend/app/services/runner.py",
+    "backend/tests/test_run_closeout.py"
+  ],
+  "issues": [],
+  "notes": "NO_ELIGIBLE_RECORDS stays graceful, while accepted evidence can now progress to ANSWER_READY or NO_ANSWER_CONTENT instead of silently stopping after labeling."
+}

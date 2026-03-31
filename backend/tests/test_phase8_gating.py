@@ -147,6 +147,37 @@ class ModelJudgeServiceTests(unittest.TestCase):
         self.assertIn("khong con kich ung", image_summary)
         self.assertIn("ocr_text_present", meta["signals"])
 
+    def test_image_fallback_can_upgrade_uncertain_record(self) -> None:
+        candidate = {
+            "post_id": "post-vision-1",
+            "content": "Anh review ngan, text khong ro.",
+            "image_ocr_text": "da do giam sau 7 ngay va khong con kich ung",
+            "image_urls": ["https://example.com/test.jpg"],
+        }
+
+        image_summary, _meta = asyncio.run(
+            self.service.build_image_summary(candidate=candidate, validity_spec=self.spec)
+        )
+        result = asyncio.run(
+            self.service.judge_text(
+                validity_spec=self.spec,
+                content_id="post-vision-1",
+                content="Anh review ngan, text khong ro.",
+                record_type="POST",
+                source_type="SEARCH_POSTS",
+                source_url="https://facebook.com/posts/vision-1",
+                query_text="mat na ngũ hoa truoc sau",
+                query_family="pain_point",
+                parent_context=None,
+                image_summary=image_summary,
+                used_image_understanding=True,
+            )
+        )
+
+        self.assertEqual(result.decision, "ACCEPTED")
+        self.assertTrue(result.used_image_understanding)
+        self.assertIn("OCR", result.image_summary)
+
 
 class BatchRoutingV2Tests(unittest.TestCase):
     def setUp(self) -> None:

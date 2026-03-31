@@ -23,6 +23,10 @@ class SessionExpiredException(RuntimeError):
     pass
 
 
+class BrowserStartupError(RuntimeError):
+    pass
+
+
 class RawPost(dict):
     post_id: str
     group_id_hash: str
@@ -71,15 +75,26 @@ class BrowserAgent:
             window=self._screen_size,
             exclude_addons=exclude_addons,
         )
-        self._browser = await self._browser_cm.__aenter__()
-        self._page = await self._browser.new_page()
-        await self._page.set_viewport_size(
-            {
-                "width": self._settings.browser_screen_width,
-                "height": self._settings.browser_screen_height,
-            }
-        )
-        await self._page.route("**/*", self._on_route)
+        try:
+            self._browser = await self._browser_cm.__aenter__()
+            self._page = await self._browser.new_page()
+            await self._page.set_viewport_size(
+                {
+                    "width": self._settings.browser_screen_width,
+                    "height": self._settings.browser_screen_height,
+                }
+            )
+            await self._page.route("**/*", self._on_route)
+        except Exception as exc:
+            self._browser = None
+            self._page = None
+            if self._browser_cm is not None:
+                try:
+                    await self._browser_cm.__aexit__(type(exc), exc, exc.__traceback__)
+                except Exception:
+                    pass
+            self._browser_cm = None
+            raise BrowserStartupError(f"browser startup failed: {exc}") from exc
 
     def _prepare_profile_dir(self) -> None:
         cleanup_targets = [

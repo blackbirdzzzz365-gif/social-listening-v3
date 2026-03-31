@@ -15,14 +15,21 @@ from app.models.label_job import LabelJob
 from app.models.run import PlanRun
 from app.services.content_labeling import ContentLabelingService
 from app.services.health_monitor import utc_now_iso
+from app.services.run_closeout import RunCloseoutService
 
 NO_ELIGIBLE_RECORDS_STATUS = "NO_ELIGIBLE_RECORDS"
 
 
 class LabelJobService:
-    def __init__(self, content_labeling_service: ContentLabelingService, settings: Settings) -> None:
+    def __init__(
+        self,
+        content_labeling_service: ContentLabelingService,
+        settings: Settings,
+        closeout_service: RunCloseoutService | None = None,
+    ) -> None:
         self._content_labeling_service = content_labeling_service
         self._settings = settings
+        self._closeout_service = closeout_service
         self._tasks: dict[str, asyncio.Task[None]] = {}
 
     async def ensure_job_for_run(self, run_id: str, *, auto_start: bool = False) -> dict[str, Any]:
@@ -32,6 +39,10 @@ class LabelJobService:
                 raise ValueError("run not found")
             total_records = self.count_eligible_records(run_id, session=session)
             if total_records == 0:
+                run.answer_status = NO_ELIGIBLE_RECORDS_STATUS
+                run.answer_generated_at = None
+                session.add(run)
+                session.commit()
                 return self._build_no_eligible_summary(run_id)
             job = session.scalars(
                 select(LabelJob)
@@ -108,6 +119,22 @@ class LabelJobService:
         if payload["status"] in {"RUNNING", "PENDING"}:
             payload["warning"] = "Labeling is still in progress. Theme filters may shift as more records are classified."
         return payload
+
+    def get_closeout_summary(self, run_id: str) -> dict[str, Any] | None:
+        if self._closeout_service is None:
+            return None
+        return self._closeout_service.get_summary(run_id)
+
+    async def wait_for_run(self, run_id: str) -> dict[str, Any]:
+        summary = self.get_summary(run_id)
+        label_job_id = summary.get("label_job_id")
+        if label_job_id and label_job_id in self._tasks:
+            await self._tasks[label_job_id]
+            summary = self.get_summary(run_id)
+        return {
+            "label_summary": summary,
+            "closeout_summary": self.get_closeout_summary(run_id),
+        }
 
     def count_eligible_records(self, run_id: str, *, session=None) -> int:
         if session is not None:
@@ -208,14 +235,21 @@ class LabelJobService:
 
     async def _run_job(self, label_job_id: str) -> None:
         try:
+            run_id: str | None = None
             with SessionLocal() as session:
                 job = session.get(LabelJob, label_job_id)
                 if job is None:
                     return
+                run_id = job.run_id
                 job.status = "RUNNING"
                 job.started_at = job.started_at or utc_now_iso()
                 session.add(job)
                 session.commit()
             await self._content_labeling_service.process_job(label_job_id)
+            if self._closeout_service is not None and run_id:
+                with SessionLocal() as session:
+                    job = session.get(LabelJob, label_job_id)
+                    if job is not None and job.status in {"DONE", "PARTIAL"}:
+                        await self._closeout_service.ensure_closeout_for_run(run_id)
         finally:
             self._tasks.pop(label_job_id, None)

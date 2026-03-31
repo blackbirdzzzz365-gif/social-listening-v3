@@ -1,0 +1,14 @@
+{
+  "cp": "cp3-yield-aware-plan-routing",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-03-31T22:11:38+0700",
+  "summary": "Implemented yield-aware query suggestion and routing heuristics so trust, fraud, complaint, and fee postures surface earlier for finance/trust cases.",
+  "artifacts": [
+    "backend/app/services/retrieval_quality.py",
+    "backend/app/services/runner.py",
+    "backend/tests/test_retrieval_quality.py"
+  ],
+  "issues": [],
+  "notes": "This is a deterministic re-ranker layer on top of existing planning, not a planner prompt-only tweak."
+}

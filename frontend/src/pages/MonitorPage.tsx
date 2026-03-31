@@ -27,6 +27,9 @@ type StepRun = {
 type RunResponse = {
   run_id: string;
   status: string;
+  completion_reason?: string | null;
+  failure_class?: string | null;
+  answer_status?: string | null;
   total_records: number;
   steps: StepRun[];
 };
@@ -139,6 +142,8 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
     const source = new EventSource(apiUrl(`/api/runs/${normalizedRunId}/stream`));
     const knownEvents = [
       "run_started",
+      "run_queued",
+      "run_admitted",
       "step_started",
       "step_done",
       "step_failed",
@@ -279,6 +284,15 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
         {run ? (
           <Stack gap="sm">
             <StatusBadge label={`Run ${run.status}`} status={run.status} />
+            {run.completion_reason ? (
+              <KeyValueRow label="completion" value={<StatusBadge status={run.completion_reason} />} />
+            ) : null}
+            {run.failure_class ? (
+              <KeyValueRow label="failure class" value={<StatusBadge status={run.failure_class} />} />
+            ) : null}
+            {run.answer_status ? (
+              <KeyValueRow label="answer status" value={<StatusBadge status={run.answer_status} />} />
+            ) : null}
             <KeyValueRow label="records" value={run.total_records} />
             {run.steps.map((step) => (
               <Paper key={step.step_run_id} p="sm" radius="md" withBorder>

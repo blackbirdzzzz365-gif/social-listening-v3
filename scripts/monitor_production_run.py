@@ -113,9 +113,25 @@ summary_queries = {{
         "SELECT COALESCE(provider_used, 'NULL') AS provider_used, fallback_used, COUNT(*) AS count "
         "FROM crawled_posts WHERE run_id = ? GROUP BY provider_used, fallback_used ORDER BY provider_used, fallback_used"
     ),
+    "judge_outcomes": (
+        "SELECT COALESCE(judge_decision, COALESCE(pre_ai_status, 'NULL')) AS decision, "
+        "judge_used_image_understanding AS used_image_understanding, COUNT(*) AS count "
+        "FROM crawled_posts WHERE run_id = ? "
+        "GROUP BY decision, used_image_understanding ORDER BY decision, used_image_understanding"
+    ),
+    "label_jobs": (
+        "SELECT label_job_id, status, records_total, records_labeled, records_failed, records_fallback, created_at, completed_at "
+        "FROM label_jobs WHERE run_id = ? ORDER BY created_at DESC"
+    ),
+    "theme_results": (
+        "SELECT COUNT(*) AS theme_count FROM theme_results WHERE run_id = ?"
+    ),
     "top_records": (
-        "SELECT post_id, record_type, pre_ai_status, pre_ai_score, query_family, source_type, batch_decision, source_url, parent_post_id "
-        "FROM crawled_posts WHERE run_id = ? ORDER BY COALESCE(pre_ai_score, -1) DESC, post_id LIMIT 25"
+        "SELECT post_id, record_type, pre_ai_status, pre_ai_score, judge_decision, judge_confidence_score, "
+        "judge_used_image_understanding, query_family, source_type, batch_decision, source_url, parent_post_id "
+        "FROM crawled_posts WHERE run_id = ? "
+        "ORDER BY CASE COALESCE(judge_decision, pre_ai_status, 'NULL') "
+        "WHEN 'ACCEPTED' THEN 0 WHEN 'UNCERTAIN' THEN 1 ELSE 2 END, COALESCE(pre_ai_score, -1) DESC, post_id LIMIT 25"
     ),
 }}
 
@@ -147,18 +163,22 @@ def safe_json_loads(value: str | None) -> dict | list | None:
         return None
 
 
-def summarize_phase7(snapshot: dict) -> dict:
+def summarize_run(snapshot: dict) -> dict:
     run = snapshot.get("run") or {}
     step_runs = snapshot.get("step_runs") or []
     context = snapshot.get("context") or {}
     summaries = (snapshot.get("summaries") or {})
     top_records = summaries.get("top_records") or []
 
-    phase7_flags = {
+    phase_flags = {
         "retrieval_profile_present": bool(context.get("retrieval_profile_json")),
         "pre_ai_status_present": any((row.get("pre_ai_status") or "NULL") != "NULL" for row in summaries.get("crawled_by_status", [])),
         "batch_decision_present": any((row.get("batch_decision") or "NULL") != "NULL" for row in summaries.get("crawled_by_batch_decision", [])),
         "comment_step_zero_after_no_accepts": False,
+        "answer_status_present": bool(run.get("answer_status")),
+        "reformulation_observed": False,
+        "reason_cluster_observed": False,
+        "image_fallback_observed": False,
     }
 
     accepted_total = 0
@@ -178,6 +198,11 @@ def summarize_phase7(snapshot: dict) -> dict:
     for plan_step in snapshot.get("plan_steps") or []:
         by_action[plan_step["step_id"]] = plan_step["action_type"]
 
+    accepted_by_step_run: dict[str, int] = {}
+    for row in summaries.get("crawled_by_step", []):
+        if row.get("pre_ai_status") == "ACCEPTED":
+            accepted_by_step_run[row.get("step_run_id") or ""] = accepted_by_step_run.get(row.get("step_run_id") or "", 0) + int(row.get("count") or 0)
+
     completed_steps = []
     running_steps = []
     pending_steps = []
@@ -190,6 +215,7 @@ def summarize_phase7(snapshot: dict) -> dict:
             "started_at": step.get("started_at"),
             "ended_at": step.get("ended_at"),
             "actual_count": step.get("actual_count"),
+            "accepted_count": accepted_by_step_run.get(step["step_run_id"], 0),
             "error_message": step.get("error_message"),
         }
         if step["status"] == "DONE":
@@ -205,17 +231,53 @@ def summarize_phase7(snapshot: dict) -> dict:
         if by_action.get(step["step_id"]) != "CRAWL_COMMENTS":
             continue
         if step.get("actual_count") == 0 and accepted_total == 0:
-            phase7_flags["comment_step_zero_after_no_accepts"] = True
+            phase_flags["comment_step_zero_after_no_accepts"] = True
 
     checkpoint_batch_summaries = []
+    query_attempts = []
     for step in step_runs:
         checkpoint = safe_json_loads(step.get("checkpoint") or step.get("checkpoint_json"))
         if not isinstance(checkpoint, dict):
             continue
         for batch in checkpoint.get("batch_summaries") or []:
             checkpoint_batch_summaries.append(batch)
+        for query_attempt in checkpoint.get("query_attempts") or []:
+            query_attempts.append(query_attempt)
 
-    decision_counter = Counter(batch.get("decision") for batch in checkpoint_batch_summaries if batch.get("decision"))
+    decision_counter = Counter(
+        batch.get("batch_decision") or batch.get("decision")
+        for batch in checkpoint_batch_summaries
+        if batch.get("batch_decision") or batch.get("decision")
+    )
+    reformulated_queries = [
+        reformulated_query
+        for attempt in query_attempts
+        for reformulated_query in (attempt.get("reformulated_queries") or [])
+        if reformulated_query
+    ]
+    reason_clusters = Counter(
+        attempt.get("reason_cluster")
+        for attempt in query_attempts
+        if attempt.get("reason_cluster")
+    )
+    phase_flags["reformulation_observed"] = bool(reformulated_queries or any(attempt.get("used_reformulation") for attempt in query_attempts))
+    phase_flags["reason_cluster_observed"] = bool(reason_clusters)
+
+    judge_outcomes = summaries.get("judge_outcomes") or []
+    image_fallback_total = 0
+    accepted_with_image = 0
+    for row in judge_outcomes:
+        count = int(row.get("count") or 0)
+        if int(row.get("used_image_understanding") or 0) == 1:
+            image_fallback_total += count
+            if row.get("decision") == "ACCEPTED":
+                accepted_with_image += count
+    phase_flags["image_fallback_observed"] = image_fallback_total > 0
+
+    label_jobs = summaries.get("label_jobs") or []
+    latest_label_job = label_jobs[0] if label_jobs else None
+    theme_summary = summaries.get("theme_results") or []
+    theme_count = int((theme_summary[0] or {}).get("theme_count") or 0) if theme_summary else 0
 
     concerns: list[str] = []
     if accepted_total == 0:
@@ -234,6 +296,29 @@ def summarize_phase7(snapshot: dict) -> dict:
             concerns.append(
                 f"Step {step['step_id']} is marked FAILED with error `{step['error_message']}`."
             )
+    if run.get("failure_class"):
+        concerns.append(f"Run failure class is `{run.get('failure_class')}`, which indicates an infra/runtime category rather than a generic step failure.")
+    if accepted_total > 0 and run.get("answer_status") not in {"ANSWER_READY", "NO_ANSWER_CONTENT"}:
+        concerns.append(
+            "Accepted records exist but answer closeout did not finish in a final answer state yet."
+        )
+    if accepted_total > 0 and theme_count == 0:
+        concerns.append(
+            "Accepted records were found but theme synthesis still produced zero persisted themes."
+        )
+    if accepted_total == 0 and not phase_flags["reformulation_observed"]:
+        concerns.append(
+            "Zero accepted records were observed without any reformulated query path, so reason-aware reformulation is not yet helping this run."
+        )
+    if image_fallback_total == 0:
+        concerns.append(
+            "No record triggered image understanding in this run, so the vision fallback path is still unproven for this production scenario."
+        )
+    for step in completed_steps:
+        if step.get("action_type") == "SEARCH_IN_GROUP" and step.get("accepted_count") == 0 and int(step.get("actual_count") or 0) > 0:
+            concerns.append(
+                f"Step {step['step_id']} SEARCH_IN_GROUP scanned records but yielded zero ACCEPTED posts, so this path may still be over-prioritized."
+            )
 
     failure_mode = None
     if failed_steps:
@@ -246,36 +331,45 @@ def summarize_phase7(snapshot: dict) -> dict:
             )
 
     recommendations = [
-        "Tighten query abandonment when accepted_count stays at 0 after the first weak batch for strict-mode runs.",
-        "Add adaptive query reformulation or fallback to better query families instead of continuing broad/merchant-heavy searches.",
-        "Treat zero eligible records as a graceful terminal outcome for labeling/theme stages instead of failing the whole run.",
-        "Persist richer run-level audit events so production analysis does not depend on large checkpoint blobs and container logs.",
-        "Capture source/group quality memory to suppress repeatedly low-yield groups in later steps and future runs.",
-        "Add completion SLA alerts for long-running retrieval steps so operators can detect stalls before morning review.",
+        "Keep browser-backed runs behind a single-flight lease and alert explicitly on browser admission wait time so production safety regressions are visible early.",
+        "Promote answer delivery to a first-class success criterion by tracking accepted-to-theme and accepted-to-answer conversion on every production run.",
+        "Re-rank weak SEARCH_IN_GROUP paths behind proven trust, fraud, fee, and complaint postures when early search batches already show better yield elsewhere.",
+        "Use dominant reject reason clusters to force reformulation instead of only stopping weak paths, then audit whether the rewritten query changed yield.",
+        "Continue capturing image-fallback usage metrics, but validate them on dedicated image-bearing contexts before claiming the capability is production-proven.",
+        "Persist richer run-level audit events so production analysis does not depend only on checkpoint blobs and container logs.",
     ]
 
     next_phase_options = [
-        "Adaptive retrieval planner: use early batch outcomes to skip, rewrite, or reorder later query families.",
+        "Goal-aware execution: stop the whole plan once the run has enough high-confidence evidence to answer the user question, not only once the step list is exhausted.",
         "Source quality memory: maintain per-group and per-query quality scores across runs for smarter exploration budgets.",
-        "Operator feedback loop: let users mark retrieved posts/groups as relevant or noisy to improve future gating.",
-        "Run observability layer: timeline events, per-step counters, and provider traces exposed directly in UI/API.",
-        "Goal-aware execution: stop the run early when enough high-confidence signals exist for the user question instead of always exhausting the plan.",
+        "Operator rescue mode: let an operator expand into category, symptom, or competitor terms when strict mode finds zero evidence after the first strong paths.",
+        "Vision validation track: run recurring image-bearing case packs for before-after, screenshot, fee table, and scam-proof scenarios.",
+        "Run observability layer: show admission queueing, answer closeout state, reformulation attempts, and image-trigger counts directly in the monitor UI.",
     ]
 
     return {
         "run_status": run.get("status"),
         "completion_reason": run.get("completion_reason"),
+        "failure_class": run.get("failure_class"),
+        "answer_status": run.get("answer_status"),
         "total_records": run.get("total_records"),
         "accepted_total": accepted_total,
         "uncertain_total": uncertain_total,
         "rejected_total": rejected_total,
-        "phase7_flags": phase7_flags,
+        "theme_count": theme_count,
+        "image_fallback_total": image_fallback_total,
+        "accepted_with_image": accepted_with_image,
+        "latest_label_job": latest_label_job,
+        "phase_flags": phase_flags,
         "completed_steps": completed_steps,
         "running_steps": running_steps,
         "pending_steps": pending_steps,
         "failed_steps": failed_steps,
         "failure_mode": failure_mode,
         "batch_decisions": dict(decision_counter),
+        "reason_clusters": dict(reason_clusters),
+        "reformulated_queries": reformulated_queries[:20],
+        "query_attempts": query_attempts[:20],
         "top_records": top_records[:10],
         "concerns": concerns,
         "recommendations": recommendations,
@@ -294,6 +388,8 @@ def render_report(snapshot: dict, analysis: dict, output_dir: Path) -> None:
         f"- Topic: {context.get('topic', 'N/A')}",
         f"- Run status: {analysis.get('run_status')}",
         f"- Completion reason: {analysis.get('completion_reason')}",
+        f"- Failure class: {analysis.get('failure_class')}",
+        f"- Answer status: {analysis.get('answer_status')}",
         f"- Started at: {run.get('started_at')}",
         f"- Ended at: {run.get('ended_at')}",
         f"- Total records persisted: {analysis.get('total_records')}",
@@ -303,7 +399,7 @@ def render_report(snapshot: dict, analysis: dict, output_dir: Path) -> None:
     for item in analysis.get("completed_steps", []):
         lines.append(
             f"- DONE `{item['step_id']}` `{item['action_type']}` from {item.get('started_at')} to {item.get('ended_at')} "
-            f"with actual_count={item.get('actual_count')}"
+            f"with actual_count={item.get('actual_count')} accepted_count={item.get('accepted_count')}"
         )
     for item in analysis.get("running_steps", []):
         lines.append(
@@ -317,25 +413,31 @@ def render_report(snapshot: dict, analysis: dict, output_dir: Path) -> None:
     for item in analysis.get("pending_steps", []):
         lines.append(f"- PENDING `{item['step_id']}` `{item['action_type']}`")
 
-    flags = analysis.get("phase7_flags") or {}
+    flags = analysis.get("phase_flags") or {}
     lines.extend(
         [
             "",
-            "## Phase 7 Alignment",
+            "## Phase 9 Alignment",
             f"- Retrieval profile present: `{flags.get('retrieval_profile_present')}`",
             f"- Deterministic pre-AI statuses present: `{flags.get('pre_ai_status_present')}`",
             f"- Batch-level decisions present: `{flags.get('batch_decision_present')}`",
             f"- Selective comment expansion observed: `{flags.get('comment_step_zero_after_no_accepts')}`",
+            f"- Reason-aware reformulation observed: `{flags.get('reformulation_observed')}`",
+            f"- Reason clusters observed: `{flags.get('reason_cluster_observed')}`",
+            f"- Image fallback observed: `{flags.get('image_fallback_observed')}`",
+            f"- Answer status present: `{flags.get('answer_status_present')}`",
             f"- ACCEPTED / UNCERTAIN / REJECTED: `{analysis.get('accepted_total')}` / `{analysis.get('uncertain_total')}` / `{analysis.get('rejected_total')}`",
+            f"- Theme count: `{analysis.get('theme_count')}`",
+            f"- Image fallback count / accepted with image: `{analysis.get('image_fallback_total')}` / `{analysis.get('accepted_with_image')}`",
             "",
             "## Initial Verdict",
         ]
     )
 
     if flags.get("retrieval_profile_present") and flags.get("pre_ai_status_present") and flags.get("batch_decision_present"):
-        lines.append("- Phase 7 logic is partially active in production: retrieval profile, deterministic gating, and batch health are visible in run artifacts.")
+        lines.append("- Phase 9 runtime signals are visible in production artifacts: retrieval profile, deterministic gating, and batch health are present.")
     else:
-        lines.append("- Phase 7 logic is not fully observable from production artifacts yet.")
+        lines.append("- Phase 9 logic is not fully observable from production artifacts yet.")
 
     if analysis.get("accepted_total", 0) == 0:
         lines.append("- The current run has not produced any ACCEPTED records yet, so business-value output is still weak even though gating is running.")
@@ -343,12 +445,23 @@ def render_report(snapshot: dict, analysis: dict, output_dir: Path) -> None:
         lines.append("- The run ended gracefully with zero eligible records after pre-AI gating, which matches the intended strict-mode behavior.")
     if analysis.get("failure_mode") == "post_run_labeling_failed_on_zero_eligible_records":
         lines.append("- The final FAILED state is misleading: the retrieval pipeline completed, but post-run auto-labeling treated zero eligible records as an exception instead of a graceful no-op.")
+    if analysis.get("answer_status") == "ANSWER_READY":
+        lines.append("- The run reached an answer-ready terminal state, which means Phase 9 answer closeout worked end-to-end.")
+    elif analysis.get("accepted_total", 0) > 0 and analysis.get("theme_count", 0) == 0:
+        lines.append("- The run found accepted evidence, but answer delivery is still incomplete because no themes were persisted.")
     if analysis.get("running_steps"):
         lines.append("- The run is still in progress, so this report is interim until final completion.")
 
     lines.extend(["", "## Efficiency Concerns"])
     for concern in analysis.get("concerns", []):
         lines.append(f"- {concern}")
+
+    if analysis.get("reason_clusters") or analysis.get("reformulated_queries"):
+        lines.extend(["", "## Reformulation Signals"])
+        if analysis.get("reason_clusters"):
+            lines.append(f"- Reason clusters: `{json.dumps(analysis.get('reason_clusters') or {}, ensure_ascii=False)}`")
+        for query in analysis.get("reformulated_queries") or []:
+            lines.append(f"- Reformulated query: `{query}`")
 
     lines.extend(["", "## Recommended Fixes"])
     for recommendation in analysis.get("recommendations", []):
@@ -361,8 +474,10 @@ def render_report(snapshot: dict, analysis: dict, output_dir: Path) -> None:
     lines.extend(["", "## Top Records Snapshot"])
     for record in analysis.get("top_records", []):
         lines.append(
-            f"- `{record.get('post_id')}` status=`{record.get('pre_ai_status')}` score=`{record.get('pre_ai_score')}` "
-            f"query_family=`{record.get('query_family')}` source_type=`{record.get('source_type')}`"
+            f"- `{record.get('post_id')}` status=`{record.get('judge_decision') or record.get('pre_ai_status')}` "
+            f"score=`{record.get('pre_ai_score')}` confidence=`{record.get('judge_confidence_score')}` "
+            f"query_family=`{record.get('query_family')}` source_type=`{record.get('source_type')}` "
+            f"image_used=`{record.get('judge_used_image_understanding')}`"
         )
 
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -377,9 +492,13 @@ def update_status(snapshot: dict, analysis: dict, output_dir: Path) -> None:
         f"- Last updated (UTC): {utc_now().isoformat()}",
         f"- Run status: `{analysis.get('run_status')}`",
         f"- Completion reason: `{analysis.get('completion_reason')}`",
+        f"- Failure class: `{analysis.get('failure_class')}`",
+        f"- Answer status: `{analysis.get('answer_status')}`",
         f"- Total records: `{analysis.get('total_records')}`",
         f"- ACCEPTED / UNCERTAIN / REJECTED: `{analysis.get('accepted_total')}` / `{analysis.get('uncertain_total')}` / `{analysis.get('rejected_total')}`",
         f"- Batch decisions: `{json.dumps(analysis.get('batch_decisions') or {}, ensure_ascii=False)}`",
+        f"- Theme count: `{analysis.get('theme_count')}`",
+        f"- Image fallback count: `{analysis.get('image_fallback_total')}`",
         "",
         "## Running Steps",
     ]
@@ -434,7 +553,7 @@ def main() -> int:
                 append_text(full_log_path, f"\n\n===== poll {poll_started_at.isoformat()} =====\n")
                 append_text(full_log_path, log_chunk)
 
-            analysis = summarize_phase7(snapshot)
+            analysis = summarize_run(snapshot)
 
             snapshot_name = poll_started_at.strftime("%Y%m%dT%H%M%SZ")
             write_json(snapshots_dir / f"{snapshot_name}.json", snapshot)

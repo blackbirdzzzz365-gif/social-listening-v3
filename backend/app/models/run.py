@@ -12,7 +12,7 @@ class PlanRun(Base):
     __tablename__ = "plan_runs"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('RUNNING','PAUSED','DONE','FAILED','CANCELLED')",
+            "status IN ('QUEUED','RUNNING','PAUSED','DONE','FAILED','CANCELLED')",
             name="ck_plan_runs_status",
         ),
     )
@@ -26,6 +26,9 @@ class PlanRun(Base):
     )
     status: Mapped[str] = mapped_column(Text, nullable=False)
     completion_reason: Mapped[Optional[str]] = mapped_column(Text)
+    failure_class: Mapped[Optional[str]] = mapped_column(Text)
+    answer_status: Mapped[Optional[str]] = mapped_column(Text)
+    answer_generated_at: Mapped[Optional[str]] = mapped_column(Text)
     started_at: Mapped[str] = mapped_column(
         Text,
         nullable=False,

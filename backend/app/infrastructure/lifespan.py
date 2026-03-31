@@ -14,9 +14,11 @@ from app.infrastructure.config import Settings
 from app.services.approval import ApprovalService
 from app.services.content_labeling import ContentLabelingService
 from app.services.health_monitor import HealthMonitorService
+from app.services.browser_run_admission import BrowserRunAdmissionService
 from app.services.insight import InsightService
 from app.services.label_job_service import LabelJobService
 from app.services.planner import PlannerService
+from app.services.run_closeout import RunCloseoutService
 from app.services.runner import RunnerService
 
 logger = logging.getLogger(__name__)
@@ -41,15 +43,22 @@ async def lifespan_factory(app: FastAPI, settings: Settings) -> AsyncIterator[No
     app.state.planner_service = PlannerService(app.state.ai_client, settings)
     app.state.approval_service = ApprovalService(app.state.health_monitor)
     app.state.content_labeling_service = ContentLabelingService(app.state.ai_client, settings)
-    app.state.label_job_service = LabelJobService(app.state.content_labeling_service, settings)
+    app.state.insight_service = InsightService(app.state.ai_client, settings)
+    app.state.run_closeout_service = RunCloseoutService(app.state.insight_service, settings)
+    app.state.browser_run_admission_service = BrowserRunAdmissionService()
+    app.state.label_job_service = LabelJobService(
+        app.state.content_labeling_service,
+        settings,
+        closeout_service=app.state.run_closeout_service,
+    )
     app.state.runner_service = RunnerService(
         app.state.browser_agent,
         app.state.health_monitor,
         app.state.ai_client,
         app.state.label_job_service,
-        settings,
+        browser_admission_service=app.state.browser_run_admission_service,
+        settings=settings,
     )
-    app.state.insight_service = InsightService(app.state.ai_client, settings)
     app.state.browser_setup_task = None
     await app.state.health_monitor.start()
     await app.state.label_job_service.resume_incomplete_jobs()

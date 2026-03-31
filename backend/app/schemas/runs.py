@@ -29,6 +29,9 @@ class RunResponse(BaseModel):
     plan_version: int
     status: str
     completion_reason: str | None = None
+    failure_class: str | None = None
+    answer_status: str | None = None
+    answer_generated_at: str | None = None
     started_at: str
     ended_at: str | None
     total_records: int

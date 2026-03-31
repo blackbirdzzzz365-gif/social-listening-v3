@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import json
 import re
 import unicodedata
@@ -34,6 +35,11 @@ UI_NOISE_TERMS = {
 
 QUESTION_SUFFIXES = ("co tot khong", "co uy tin khong", "co nen dung khong")
 COMPLAINT_PREFIXES = ("loi", "phi", "chan", "te", "bi khoa", "bi tru")
+TRUST_SIGNAL_TERMS = ("trust", "uy tin", "lua dao", "fraud", "scam", "bi lua")
+COST_SIGNAL_TERMS = ("phi", "fee", "lai", "interest", "chi phi", "gia cao")
+SYMPTOM_SIGNAL_TERMS = ("kich ung", "mun", "da nhay cam", "side effect", "tac dung phu", "pain")
+PROMO_REASON_TERMS = ("promot", "seller", "commercial", "cta", "transactional")
+TARGET_REASON_TERMS = ("target", "mention", "brand", "entity")
 
 
 def strip_diacritics(value: str) -> str:
@@ -174,29 +180,25 @@ class RetrievalProfileBuilder:
             return "question"
         return "generic"
 
-    def suggest_queries(self, query: str, profile: dict[str, Any] | None, *, max_variants: int = 2) -> list[str]:
+    def suggest_queries(
+        self,
+        query: str,
+        profile: dict[str, Any] | None,
+        *,
+        validity_spec: dict[str, Any] | None = None,
+        max_variants: int = 2,
+    ) -> list[str]:
         profile = profile or {}
         max_variants = max(1, max_variants)
         normalized_query = normalize_text(query)
         query_families = profile.get("query_families", [])
-        preferred_intents: list[str]
         incomplete_comparison = normalized_query.endswith(" vs") or " vs " in normalized_query
-        if incomplete_comparison:
-            preferred_intents = ["comparison", "pain_point", "question"]
-        elif any(term in normalized_query for term in ("fake", "lua dao", "loi", "te")):
-            preferred_intents = ["complaint", "pain_point", "question"]
-        else:
-            inferred_family = self.infer_query_family(query, profile)
-            if inferred_family in {"generic", "brand"}:
-                preferred_intents = ["pain_point", "question", "comparison"]
-            elif inferred_family == "comparison":
-                preferred_intents = ["comparison", "pain_point", "question"]
-            else:
-                preferred_intents = ["question", "pain_point", "comparison", "complaint"]
+        preferred_intents = self._preferred_intents(query, profile, validity_spec)
 
         ordered_queries: list[str] = []
         if not incomplete_comparison:
             ordered_queries.append(query)
+            ordered_queries.extend(self._build_semantic_expansions(query, profile, validity_spec))
 
         primary_inserted = False
         for intent in preferred_intents:
@@ -212,6 +214,171 @@ class RetrievalProfileBuilder:
 
         ordered_queries.append(query)
         return dedupe_keep_order(ordered_queries)[:max_variants]
+
+    def build_reformulations(
+        self,
+        query: str,
+        profile: dict[str, Any] | None,
+        validity_spec: dict[str, Any] | None,
+        reason_cluster: str,
+        *,
+        max_variants: int = 2,
+    ) -> list[str]:
+        ordered: list[str] = []
+        base_query = self._base_query(query, profile)
+        if reason_cluster == "promo_noise":
+            ordered.extend(
+                [
+                    f"{base_query} bi lua".strip(),
+                    f"{base_query} co uy tin khong".strip(),
+                    f"review {base_query}".strip(),
+                ]
+            )
+        elif reason_cluster == "trust_gap":
+            ordered.extend(
+                [
+                    f"{base_query} bi lua".strip(),
+                    f"{base_query} co uy tin khong".strip(),
+                ]
+            )
+        elif reason_cluster == "cost_gap":
+            ordered.extend(
+                [
+                    f"{base_query} phi cao".strip(),
+                    f"{base_query} lai suat cao".strip(),
+                ]
+            )
+        elif reason_cluster == "symptom_gap":
+            for term in (profile or {}).get("related_terms", [])[:2]:
+                ordered.append(f"{base_query} {term}".strip())
+        elif reason_cluster == "target_weak":
+            ordered.extend([base_query, f"review {base_query}".strip()])
+
+        ordered.extend(
+            self.suggest_queries(
+                query,
+                profile,
+                validity_spec=validity_spec,
+                max_variants=max(max_variants + 1, 3),
+            )
+        )
+        return [candidate for candidate in dedupe_keep_order(ordered) if normalize_text(candidate) != normalize_text(query)][
+            :max_variants
+        ]
+
+    def cluster_reject_reasons(
+        self,
+        reason_codes: list[str],
+        *,
+        query: str,
+        validity_spec: dict[str, Any] | None = None,
+    ) -> str:
+        counter: Counter[str] = Counter()
+        validity_text = self._validity_signal_text(validity_spec)
+        normalized_query = normalize_text(query)
+        for reason_code in reason_codes:
+            normalized = normalize_text(reason_code)
+            if any(token in normalized for token in PROMO_REASON_TERMS):
+                counter["promo_noise"] += 1
+            elif any(token in normalized for token in TARGET_REASON_TERMS):
+                counter["target_weak"] += 1
+            elif any(token in normalized for token in COST_SIGNAL_TERMS):
+                counter["cost_gap"] += 1
+            elif any(token in normalized for token in TRUST_SIGNAL_TERMS):
+                counter["trust_gap"] += 1
+            elif any(token in normalized for token in SYMPTOM_SIGNAL_TERMS):
+                counter["symptom_gap"] += 1
+            else:
+                counter["generic_weak"] += 1
+
+        if any(token in validity_text for token in TRUST_SIGNAL_TERMS) and not any(
+            token in normalized_query for token in TRUST_SIGNAL_TERMS
+        ):
+            counter["trust_gap"] += 1
+        if any(token in validity_text for token in COST_SIGNAL_TERMS) and not any(
+            token in normalized_query for token in COST_SIGNAL_TERMS
+        ):
+            counter["cost_gap"] += 1
+        if any(token in validity_text for token in SYMPTOM_SIGNAL_TERMS) and not any(
+            token in normalized_query for token in SYMPTOM_SIGNAL_TERMS
+        ):
+            counter["symptom_gap"] += 1
+        if not counter:
+            return "generic_weak"
+        return counter.most_common(1)[0][0]
+
+    def _preferred_intents(
+        self,
+        query: str,
+        profile: dict[str, Any] | None,
+        validity_spec: dict[str, Any] | None,
+    ) -> list[str]:
+        normalized_query = normalize_text(query)
+        validity_text = self._validity_signal_text(validity_spec)
+        if normalized_query.endswith(" vs") or " vs " in normalized_query:
+            return ["comparison", "pain_point", "question", "complaint"]
+        if any(term in normalized_query for term in ("fake", "lua dao", "loi", "te")):
+            return ["complaint", "pain_point", "question", "comparison"]
+        if any(term in validity_text for term in TRUST_SIGNAL_TERMS + COST_SIGNAL_TERMS):
+            return ["complaint", "pain_point", "question", "comparison", "brand"]
+        if any(term in validity_text for term in SYMPTOM_SIGNAL_TERMS):
+            return ["pain_point", "question", "comparison", "complaint", "brand"]
+        inferred_family = self.infer_query_family(query, profile)
+        if inferred_family in {"generic", "brand"}:
+            return ["pain_point", "question", "comparison", "complaint"]
+        if inferred_family == "comparison":
+            return ["comparison", "pain_point", "question", "complaint"]
+        return ["question", "pain_point", "comparison", "complaint"]
+
+    def _build_semantic_expansions(
+        self,
+        query: str,
+        profile: dict[str, Any] | None,
+        validity_spec: dict[str, Any] | None,
+    ) -> list[str]:
+        profile = profile or {}
+        validity_text = self._validity_signal_text(validity_spec)
+        base_query = self._base_query(query, profile)
+        expansions: list[str] = []
+        if any(term in validity_text for term in TRUST_SIGNAL_TERMS):
+            expansions.extend(
+                [
+                    f"{base_query} bi lua".strip(),
+                ]
+            )
+        if any(term in validity_text for term in COST_SIGNAL_TERMS):
+            expansions.extend(
+                [
+                    f"{base_query} phi cao".strip(),
+                    f"{base_query} lai suat cao".strip(),
+                ]
+            )
+        if any(term in validity_text for term in TRUST_SIGNAL_TERMS):
+            expansions.extend(
+                [
+                    f"{base_query} review".strip(),
+                    f"{base_query} co uy tin khong".strip(),
+                ]
+            )
+        for term in profile.get("related_terms", [])[:2]:
+            expansions.append(f"{base_query} {term}".strip())
+        return [candidate for candidate in dedupe_keep_order(expansions) if normalize_text(candidate) != normalize_text(query)]
+
+    def _validity_signal_text(self, validity_spec: dict[str, Any] | None) -> str:
+        validity_spec = validity_spec or {}
+        joined = " ".join(
+            [
+                str(validity_spec.get("research_objective") or ""),
+                " ".join(str(item) for item in validity_spec.get("target_signal_types", [])),
+                " ".join(str(item) for item in validity_spec.get("must_have_signals", [])),
+            ]
+        )
+        return normalize_text(joined)
+
+    def _base_query(self, query: str, profile: dict[str, Any] | None) -> str:
+        profile = profile or {}
+        anchors = profile.get("anchors", [])
+        return str(anchors[0] if anchors else query).strip()
 
 
 class DeterministicRelevanceEngine:

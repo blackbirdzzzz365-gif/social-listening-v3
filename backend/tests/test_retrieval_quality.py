@@ -50,6 +50,62 @@ class RetrievalProfileBuilderTests(unittest.TestCase):
         self.assertEqual(queries[0], "mặt nạ ngũ hoa vs thương hiệu khác")
         self.assertEqual(queries[1], "mặt nạ ngũ hoa vs")
 
+    def test_prioritizes_trust_and_cost_queries_when_validity_spec_demands_it(self) -> None:
+        builder = RetrievalProfileBuilder()
+        profile = builder.build(
+            topic="FE Credit",
+            keyword_map={
+                "brand": ["FE Credit"],
+                "pain_points": ["phi cao", "lãi suất cao"],
+                "comparison": [],
+                "behavior": [],
+                "sentiment": [],
+            },
+        )
+
+        queries = builder.suggest_queries(
+            "FE Credit",
+            profile,
+            validity_spec={
+                "research_objective": "Tim trustworthiness va fee complaints ve FE Credit.",
+                "target_signal_types": ["trustworthiness_assessment", "fee_complaint_signal"],
+                "must_have_signals": ["customer fraud warning", "interest rate discussion"],
+            },
+            max_variants=3,
+        )
+
+        self.assertIn("FE Credit bi lua", queries)
+        self.assertIn("FE Credit phi cao", queries)
+
+    def test_builds_reason_aware_reformulations(self) -> None:
+        builder = RetrievalProfileBuilder()
+        profile = builder.build(
+            topic="mặt nạ ngũ hoa",
+            keyword_map={
+                "brand": ["mặt nạ ngũ hoa"],
+                "pain_points": ["kích ứng", "mụn"],
+                "comparison": [],
+                "behavior": [],
+                "sentiment": ["review"],
+            },
+        )
+
+        cluster = builder.cluster_reject_reasons(
+            ["commercial_noise", "seller_cta"],
+            query="mặt nạ ngũ hoa",
+            validity_spec={"research_objective": "Tim review that va tac dung phu neu co."},
+        )
+        reformulations = builder.build_reformulations(
+            "mặt nạ ngũ hoa",
+            profile,
+            {"research_objective": "Tim review that va tac dung phu neu co."},
+            cluster,
+            max_variants=2,
+        )
+
+        self.assertEqual(cluster, "promo_noise")
+        self.assertTrue(any("review" in query.lower() or "bi lua" in query.lower() for query in reformulations))
+
 
 class RetrievalScoringTests(unittest.TestCase):
     def setUp(self) -> None:
