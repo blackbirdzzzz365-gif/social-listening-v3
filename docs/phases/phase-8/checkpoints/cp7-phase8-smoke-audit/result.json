@@ -1,0 +1,16 @@
+{
+  "cp": "cp7-phase8-smoke-audit",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-03-31T16:29:52+0700",
+  "summary": "Ran migration + end-to-end mock smoke. Final run completed successfully with validity_spec persisted, judge fields populated, labels generated, and themes filtered by Phase 8 gating.",
+  "artifacts": [
+    "docs/phases/phase-8/checkpoints/cp7-phase8-smoke-audit/DEMO_LOG.md",
+    "docs/phases/phase-8/checkpoints/cp7-phase8-smoke-audit/SMOKE_SUMMARY.json"
+  ],
+  "issues": [
+    "Initial smoke exposed two defects: unwritable browser_profile_dir and stale runner variable score. Both were fixed before final validation.",
+    "Mock smoke did not exercise image-driven judge upgrades because no records carried image metadata."
+  ],
+  "notes": "Final smoke run: run-4abbf411bb, total_records=36, judge_decision_present=36, labels_done=24."
+}

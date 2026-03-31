@@ -1,0 +1,14 @@
+{
+  "cp": "cp3-post-judging-persistence",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-03-31T16:29:52+0700",
+  "summary": "Integrated hard filter and model judging into runner candidate processing and persisted Phase 8 judge fields while keeping pre_ai compatibility.",
+  "artifacts": [
+    "backend/app/services/runner.py",
+    "backend/app/models/crawled_post.py",
+    "backend/alembic/versions/012_add_phase8_validity_and_judge_fields.py"
+  ],
+  "issues": [],
+  "notes": "Judge results now populate both judge_* columns and legacy pre_ai_* columns for downstream compatibility."
+}

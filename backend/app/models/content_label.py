@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Optional
+
 from sqlalchemy import CheckConstraint, ForeignKey, Float, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -49,7 +53,7 @@ class ContentLabel(Base):
     label_confidence: Mapped[float] = mapped_column(Float, nullable=False)
     label_reason: Mapped[str] = mapped_column(Text, nullable=False)
     label_source: Mapped[str] = mapped_column(Text, nullable=False)
-    model_name: Mapped[str | None] = mapped_column(Text)
-    model_version: Mapped[str | None] = mapped_column(Text)
+    model_name: Mapped[Optional[str]] = mapped_column(Text)
+    model_version: Mapped[Optional[str]] = mapped_column(Text)
     is_current: Mapped[bool] = mapped_column(nullable=False, default=True, server_default="1")
     created_at: Mapped[str] = mapped_column(Text, nullable=False, server_default="CURRENT_TIMESTAMP")

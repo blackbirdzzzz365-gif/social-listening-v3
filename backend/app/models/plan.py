@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Optional
+
 from sqlalchemy import CheckConstraint, ForeignKey, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -49,7 +53,7 @@ class PlanStep(Base):
     action_type: Mapped[str] = mapped_column(Text, nullable=False)
     read_or_write: Mapped[str] = mapped_column(Text, nullable=False)
     target: Mapped[str] = mapped_column(Text, nullable=False)
-    estimated_count: Mapped[int | None] = mapped_column(Integer)
-    estimated_duration_sec: Mapped[int | None] = mapped_column(Integer)
+    estimated_count: Mapped[Optional[int]] = mapped_column(Integer)
+    estimated_duration_sec: Mapped[Optional[int]] = mapped_column(Integer)
     risk_level: Mapped[str] = mapped_column(Text, nullable=False)
     dependency_step_ids: Mapped[str] = mapped_column(Text, nullable=False, default="[]")

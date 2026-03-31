@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from functools import lru_cache
 from pathlib import Path
 
@@ -31,6 +33,15 @@ class Settings(BaseSettings):
     openai_compatible_api_key: str = ""
     openai_compatible_base_url: str = "https://llm.chiasegpu.vn/v1"
     openai_compatible_timeout_sec: float = 25.0
+    phase8_judge_api_key: str = ""
+    phase8_judge_api_base_url: str = "https://llm.chiasegpu.vn/v1"
+    phase8_judge_api_timeout_sec: float = 25.0
+    phase8_judge_api_retry_count: int | None = None
+    phase8_ocr_api_key: str = ""
+    phase8_ocr_api_base_url: str = "https://llm.chiasegpu.vn/v1"
+    phase8_ocr_api_timeout_sec: float = 40.0
+    phase8_ocr_api_retry_count: int | None = None
+    ai_rate_limit_cooldown_sec: float = 60.0
     anthropic_api_key: str = ""
     anthropic_fallback_model: str = "claude-haiku-4-5"
     ai_provider_retry_count: int = 1
@@ -40,6 +51,12 @@ class Settings(BaseSettings):
     plan_generation_thinking: bool = False
     plan_refinement_model: str = "gpt-4o"
     plan_refinement_thinking: bool = False
+    validity_spec_model: str = "gpt-4o"
+    validity_spec_thinking: bool = False
+    content_judge_model: str = "gpt-4o-mini"
+    content_judge_thinking: bool = False
+    image_fallback_model: str = "gpt-4o-mini"
+    image_fallback_thinking: bool = False
     theme_analysis_model: str = "gpt-4o"
     content_labeling_model: str = "gpt-4o"
     label_taxonomy_version: str = "v1"
@@ -55,11 +72,13 @@ class Settings(BaseSettings):
     retrieval_max_scanned_per_path: int = 60
     retrieval_max_query_variants: int = 2
     pre_ai_mode: str = "strict"
+    judge_high_confidence_threshold: float = 0.75
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
 

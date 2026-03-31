@@ -24,6 +24,8 @@ Rules:
 - Return valid JSON only. No markdown fences.
 - Classify each record independently.
 - Comments under a commercial post can still be end_user.
+- If `parent_post_summary`, `parent_comment_summary`, or `thread_context` are present, use them only as supporting context for the record itself.
+- For replies, weigh the reply text against both the parent comment and the parent post before deciding relevance.
 - Prefer precision over over-claiming. Use unknown when evidence is weak.
 - Keep label_reason under 12 words.
 - Never expose chain-of-thought.

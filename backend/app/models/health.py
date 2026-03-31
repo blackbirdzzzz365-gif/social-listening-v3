@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Optional
+
 from sqlalchemy import CheckConstraint, Integer, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -22,9 +26,9 @@ class AccountHealthLog(Base):
         nullable=False,
         server_default="CURRENT_TIMESTAMP",
     )
-    action_taken: Mapped[str | None] = mapped_column(Text)
-    cooldown_until: Mapped[str | None] = mapped_column(Text)
-    raw_signal: Mapped[str | None] = mapped_column(Text)
+    action_taken: Mapped[Optional[str]] = mapped_column(Text)
+    cooldown_until: Mapped[Optional[str]] = mapped_column(Text)
+    raw_signal: Mapped[Optional[str]] = mapped_column(Text)
 
 
 class AccountHealthState(Base):
@@ -48,12 +52,11 @@ class AccountHealthState(Base):
         nullable=False,
         default="NOT_SETUP",
     )
-    account_id_hash: Mapped[str | None] = mapped_column(Text)
-    last_checked: Mapped[str | None] = mapped_column(Text)
-    cooldown_until: Mapped[str | None] = mapped_column(Text)
+    account_id_hash: Mapped[Optional[str]] = mapped_column(Text)
+    last_checked: Mapped[Optional[str]] = mapped_column(Text)
+    cooldown_until: Mapped[Optional[str]] = mapped_column(Text)
     updated_at: Mapped[str] = mapped_column(
         Text,
         nullable=False,
         server_default="CURRENT_TIMESTAMP",
     )
-

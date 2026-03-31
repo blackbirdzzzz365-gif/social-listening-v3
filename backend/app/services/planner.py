@@ -15,6 +15,7 @@ from app.infrastructure.database import SessionLocal
 from app.models.approval import ApprovalGrant
 from app.models.plan import Plan, PlanStep
 from app.models.product_context import ProductContext
+from app.services.research_gating import ValiditySpecBuilder
 from app.services.retrieval_quality import RetrievalProfileBuilder
 
 
@@ -41,6 +42,7 @@ class KeywordAnalysisResult:
     clarifying_questions: list[str] | None
     keywords: dict[str, list[str]] | None
     retrieval_profile: dict[str, object] | None
+    validity_spec: dict[str, object] | None
     clarification_history: list[dict[str, str]]
 
 
@@ -49,6 +51,7 @@ class PlannerService:
         self._ai_client = ai_client
         self._settings = settings
         self._retrieval_profile_builder = RetrievalProfileBuilder()
+        self._validity_spec_builder = ValiditySpecBuilder(ai_client, settings)
 
     async def analyze_topic(self, topic: str, prompt: str) -> KeywordAnalysisResult:
         response = await self._ai_client.call(
@@ -60,6 +63,12 @@ class PlannerService:
         context_id = f"{slugify(topic)}-{uuid4().hex[:8]}"
         clarifying_questions = response.get("clarifying_questions") or None
         retrieval_profile = self._build_retrieval_profile(topic, response.get("keywords"))
+        validity_spec = await self._build_validity_spec(
+            topic=topic,
+            clarification_history=[],
+            keywords=response.get("keywords"),
+            retrieval_profile=retrieval_profile,
+        )
         with SessionLocal() as session:
             context = ProductContext(
                 context_id=context_id,
@@ -67,6 +76,7 @@ class PlannerService:
                 status=response["status"],
                 keyword_json=json.dumps(response["keywords"]) if response.get("keywords") else None,
                 retrieval_profile_json=json.dumps(retrieval_profile) if retrieval_profile else None,
+                validity_spec_json=json.dumps(validity_spec) if validity_spec else None,
                 clarifying_question_json=json.dumps(clarifying_questions) if clarifying_questions else None,
                 clarification_history_json=json.dumps([]),
             )
@@ -79,6 +89,7 @@ class PlannerService:
             clarifying_questions=clarifying_questions,
             keywords=response.get("keywords"),
             retrieval_profile=retrieval_profile,
+            validity_spec=validity_spec,
             clarification_history=[],
         )
 
@@ -101,11 +112,18 @@ class PlannerService:
                 )
                 clarifying_questions = response.get("clarifying_questions") or None
                 retrieval_profile = self._build_retrieval_profile(context.topic, response.get("keywords"))
+                validity_spec = await self._build_validity_spec(
+                    topic=context.topic,
+                    clarification_history=history,
+                    keywords=response.get("keywords"),
+                    retrieval_profile=retrieval_profile,
+                )
                 context.clarifying_question_json = (
                     json.dumps(clarifying_questions) if clarifying_questions else None
                 )
                 context.keyword_json = json.dumps(response["keywords"]) if response.get("keywords") else None
                 context.retrieval_profile_json = json.dumps(retrieval_profile) if retrieval_profile else None
+                context.validity_spec_json = json.dumps(validity_spec) if validity_spec else None
                 context.status = response["status"]
                 session.add(context)
                 session.commit()
@@ -150,6 +168,12 @@ class PlannerService:
 
         clarifying_questions = response.get("clarifying_questions") or None
         retrieval_profile = self._build_retrieval_profile(topic, response.get("keywords"))
+        validity_spec = await self._build_validity_spec(
+            topic=topic,
+            clarification_history=merged_history,
+            keywords=response.get("keywords"),
+            retrieval_profile=retrieval_profile,
+        )
         with SessionLocal() as session:
             context = session.get(ProductContext, context_id)
             if context is None:
@@ -157,6 +181,7 @@ class PlannerService:
             context.status = response["status"]
             context.keyword_json = json.dumps(response["keywords"]) if response.get("keywords") else None
             context.retrieval_profile_json = json.dumps(retrieval_profile) if retrieval_profile else None
+            context.validity_spec_json = json.dumps(validity_spec) if validity_spec else None
             context.clarifying_question_json = json.dumps(clarifying_questions) if clarifying_questions else None
             context.clarification_history_json = json.dumps(merged_history)
             session.add(context)
@@ -171,8 +196,15 @@ class PlannerService:
             if context is None:
                 raise ValueError("context not found")
             retrieval_profile = self._build_retrieval_profile(context.topic, keywords)
+            validity_spec = await self._build_validity_spec(
+                topic=context.topic,
+                clarification_history=self._parse_history(context.clarification_history_json),
+                keywords=keywords,
+                retrieval_profile=retrieval_profile,
+            )
             context.keyword_json = json.dumps(keywords)
             context.retrieval_profile_json = json.dumps(retrieval_profile)
+            context.validity_spec_json = json.dumps(validity_spec) if validity_spec else None
             context.status = "keywords_ready"
             context.clarifying_question_json = None
             session.add(context)
@@ -190,11 +222,19 @@ class PlannerService:
                 raise ValueError("keywords are not ready")
             keywords = json.loads(context.keyword_json or "{}")
             retrieval_profile = json.loads(context.retrieval_profile_json or "{}")
+            validity_spec = json.loads(context.validity_spec_json or "{}")
 
         ai_response = await self._ai_client.call(
             model=self._settings.plan_generation_model,
             system_prompt=prompt,
-            user_input=json.dumps({"topic": context.topic, "keywords": keywords, "retrieval_profile": retrieval_profile}),
+            user_input=json.dumps(
+                {
+                    "topic": context.topic,
+                    "keywords": keywords,
+                    "retrieval_profile": retrieval_profile,
+                    "validity_spec": validity_spec,
+                }
+            ),
             thinking=self._settings.plan_generation_thinking,
         )
 
@@ -582,6 +622,7 @@ class PlannerService:
         clarifying_questions: list[str] | None,
         keywords: dict[str, list[str]] | None,
         retrieval_profile: dict[str, object] | None,
+        validity_spec: dict[str, object] | None,
         clarification_history: list[dict[str, str]],
     ) -> KeywordAnalysisResult:
         return KeywordAnalysisResult(
@@ -591,12 +632,14 @@ class PlannerService:
             clarifying_questions=clarifying_questions,
             keywords=keywords,
             retrieval_profile=retrieval_profile,
+            validity_spec=validity_spec,
             clarification_history=clarification_history,
         )
 
     def _result_from_context(self, context: ProductContext) -> KeywordAnalysisResult:
         keywords = json.loads(context.keyword_json) if context.keyword_json else None
         retrieval_profile = json.loads(context.retrieval_profile_json) if context.retrieval_profile_json else None
+        validity_spec = json.loads(context.validity_spec_json) if context.validity_spec_json else None
         clarifying_questions = self._parse_json_list(context.clarifying_question_json) or None
         clarification_history = self._parse_history(context.clarification_history_json)
         return self._build_keyword_result(
@@ -606,6 +649,7 @@ class PlannerService:
             clarifying_questions=clarifying_questions,
             keywords=keywords,
             retrieval_profile=retrieval_profile,
+            validity_spec=validity_spec,
             clarification_history=clarification_history,
         )
 
@@ -617,6 +661,25 @@ class PlannerService:
         if not keywords:
             return None
         return self._retrieval_profile_builder.build(topic=topic, keyword_map=keywords)
+
+    async def _build_validity_spec(
+        self,
+        *,
+        topic: str,
+        clarification_history: list[dict[str, str]],
+        keywords: dict[str, list[str]] | None,
+        retrieval_profile: dict[str, object] | None,
+        plan_intent: str | None = None,
+    ) -> dict[str, object] | None:
+        if not keywords and not clarification_history and not topic.strip():
+            return None
+        return await self._validity_spec_builder.build(
+            topic=topic,
+            clarification_history=clarification_history,
+            keywords=keywords,
+            retrieval_profile=retrieval_profile,
+            plan_intent=plan_intent,
+        )
 
     async def explain_steps(self, plan: dict, prompt: str) -> dict[str, str]:
         topic = ""

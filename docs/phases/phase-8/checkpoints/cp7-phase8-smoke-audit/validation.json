@@ -1,0 +1,18 @@
+{
+  "cp": "cp7-phase8-smoke-audit",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-03-31T16:29:52+0700",
+  "summary": "Phase 8 passed final validation through unit suite, migration-to-head, and an end-to-end mock smoke run.",
+  "checks": [
+    "Unit suite: PYTHONPATH=backend ./.venv/bin/python -m unittest discover -s backend/tests -p 'test_*.py' -> OK",
+    "Alembic upgrade to head on temporary DB -> OK",
+    "Mock smoke run completed: run-4abbf411bb status DONE completion_reason COMPLETED",
+    "Smoke DB counts: total=36, judge_decision_present=36, accepted=24, uncertain=9, rejected=3"
+  ],
+  "issues": [
+    "Image fallback remains unexercised in smoke because browser extraction still does not supply image metadata.",
+    "Existing planner still generates some awkward search targets in mock mode; this is a quality follow-up, not a Phase 8 blocker."
+  ],
+  "ready_for_next_cp": true
+}

@@ -1,0 +1,14 @@
+{
+  "cp": "cp4-batch-routing-v2",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-03-31T16:29:52+0700",
+  "summary": "Replaced lexical-only batch health with decision/confidence-aware routing and added reformulate support driven by validity_spec batch_policy.",
+  "artifacts": [
+    "backend/app/services/research_gating.py",
+    "backend/app/services/runner.py",
+    "backend/tests/test_phase8_gating.py"
+  ],
+  "issues": [],
+  "notes": "Search path reformulation is now triggered by uncertain-heavy batches rather than only weak lexical batches."
+}

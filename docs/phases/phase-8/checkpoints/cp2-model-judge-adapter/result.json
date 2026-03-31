@@ -1,0 +1,15 @@
+{
+  "cp": "cp2-model-judge-adapter",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-03-31T16:29:52+0700",
+  "summary": "Implemented the model-judge adapter, structured judge_result normalization, prompt contracts, mock providers, and provider fallback metadata.",
+  "artifacts": [
+    "backend/app/services/research_gating.py",
+    "backend/app/infra/ai_client.py",
+    "backend/app/skills/content_validity_judge.md",
+    "backend/app/skills/image_understanding.md"
+  ],
+  "issues": [],
+  "notes": "Unit tests run against forced mock mode to keep validation deterministic and network-free."
+}

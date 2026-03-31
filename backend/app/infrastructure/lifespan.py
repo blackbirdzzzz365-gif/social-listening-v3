@@ -45,6 +45,7 @@ async def lifespan_factory(app: FastAPI, settings: Settings) -> AsyncIterator[No
     app.state.runner_service = RunnerService(
         app.state.browser_agent,
         app.state.health_monitor,
+        app.state.ai_client,
         app.state.label_job_service,
         settings,
     )

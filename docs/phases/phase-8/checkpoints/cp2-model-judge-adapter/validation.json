@@ -1,0 +1,15 @@
+{
+  "cp": "cp2-model-judge-adapter",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-03-31T16:29:52+0700",
+  "summary": "Structured judge_result parsing, mock provider behavior, and failure-safe normalization are implemented.",
+  "checks": [
+    "Judge adapter returns decision/relevance/confidence/reason_codes.",
+    "AIClient mock path supports validity spec, judge, and image summary prompts.",
+    "Unit tests validate judge adapter behavior with forced mock settings."
+  ],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp3-post-judging-persistence"
+}

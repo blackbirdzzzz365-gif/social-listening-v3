@@ -1,0 +1,15 @@
+{
+  "cp": "cp1-validity-spec-builder",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-03-31T16:29:52+0700",
+  "summary": "Validity spec generation is persisted and exposed through session APIs.",
+  "checks": [
+    "SessionResponse now includes validity_spec.",
+    "ProductContext persists validity_spec_json.",
+    "Unit tests cover versioned validity spec generation."
+  ],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp2-model-judge-adapter"
+}

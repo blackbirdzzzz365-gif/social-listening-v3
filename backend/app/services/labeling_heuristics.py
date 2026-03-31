@@ -189,6 +189,12 @@ def classify_content(
         confidence = 0.86
         should_skip_ai = True
 
+    if record_type == "COMMENT":
+        should_skip_ai = False
+        payload["label_source"] = "hybrid"
+        payload["label_reason"] = "comment_requires_thread_context"
+        confidence = min(confidence, 0.72)
+
     payload["label_confidence"] = confidence
     return HeuristicLabelResult(
         payload=payload,

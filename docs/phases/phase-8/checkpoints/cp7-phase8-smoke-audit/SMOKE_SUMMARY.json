@@ -1,0 +1,49 @@
+{
+  "timestamp": "2026-03-31T16:29:52+0700",
+  "environment": {
+    "db": ".tmp_phase8/phase8_smoke.db",
+    "browser_mock_mode": true,
+    "browser_profile_dir": ".tmp_phase8/browser_profile",
+    "provider_mode": "mock"
+  },
+  "run": {
+    "run_id": "run-4abbf411bb",
+    "status": "DONE",
+    "completion_reason": "COMPLETED",
+    "total_records": 36
+  },
+  "session": {
+    "context_id": "phan-hoi-end-user-ve-mat-na-bot-dau-xanh-ed6b9097",
+    "status": "keywords_ready",
+    "validity_spec_id": "spec-phan-hoi-end-user-ve-mat-na-bot-dau-xanh-73eeb4944c",
+    "validity_spec_version": "phase8-v1-73eeb4944c"
+  },
+  "judge_counts": {
+    "total": 36,
+    "judge_decision_present": 36,
+    "accepted": 24,
+    "uncertain": 9,
+    "rejected": 3,
+    "judge_image_used": 0
+  },
+  "labels": {
+    "status": "DONE",
+    "records_total": 24,
+    "records_labeled": 24,
+    "records_fallback": 0,
+    "records_failed": 0
+  },
+  "themes": {
+    "posts_crawled": 36,
+    "posts_included": 22,
+    "posts_excluded": 14,
+    "excluded_breakdown": {
+      "pre_ai_rejected": 12,
+      "low_relevance": 2
+    }
+  },
+  "notes": [
+    "Initial smoke exposed two runtime defects: unwritable browser_profile_dir and stale runner variable score. Both were fixed before final smoke.",
+    "Image fallback path is implemented but not exercised in this smoke because mock browser records do not carry image metadata."
+  ]
+}

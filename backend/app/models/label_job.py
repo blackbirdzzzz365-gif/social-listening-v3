@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Optional
+
 from sqlalchemy import CheckConstraint, ForeignKey, Integer, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -18,13 +22,13 @@ class LabelJob(Base):
     label_job_id: Mapped[str] = mapped_column(Text, primary_key=True)
     run_id: Mapped[str] = mapped_column(ForeignKey("plan_runs.run_id"), nullable=False)
     taxonomy_version: Mapped[str] = mapped_column(Text, nullable=False)
-    model_name: Mapped[str | None] = mapped_column(Text)
+    model_name: Mapped[Optional[str]] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="PENDING", server_default="PENDING")
     records_total: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     records_labeled: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     records_fallback: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     records_failed: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    started_at: Mapped[str | None] = mapped_column(Text)
-    ended_at: Mapped[str | None] = mapped_column(Text)
-    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[Optional[str]] = mapped_column(Text)
+    ended_at: Mapped[Optional[str]] = mapped_column(Text)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[str] = mapped_column(Text, nullable=False, server_default="CURRENT_TIMESTAMP")

@@ -35,6 +35,7 @@ class SessionResponse(BaseModel):
     clarifying_questions: list[str] | None
     keywords: KeywordMap | None
     retrieval_profile: dict[str, Any] | None = None
+    validity_spec: dict[str, Any] | None = None
     clarification_history: list[ClarificationTurn] = Field(default_factory=list)
 
 

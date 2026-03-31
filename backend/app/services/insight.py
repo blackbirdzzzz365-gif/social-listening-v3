@@ -140,7 +140,7 @@ class InsightService:
         return clean_posts, excluded_ids, excluded_breakdown
 
     def _is_theme_eligible(self, post: CrawledPost) -> bool:
-        status = (post.pre_ai_status or "").upper()
+        status = (post.judge_decision or post.pre_ai_status or "").upper()
         if not status:
             return True
         if status == "ACCEPTED":

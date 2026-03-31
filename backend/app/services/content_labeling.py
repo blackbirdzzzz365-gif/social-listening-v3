@@ -13,6 +13,7 @@ from app.infrastructure.database import SessionLocal
 from app.models.content_label import ContentLabel
 from app.models.crawled_post import CrawledPost
 from app.models.label_job import LabelJob
+from app.services.comment_context import build_context_map, build_record_context
 from app.services.health_monitor import utc_now_iso
 from app.services.labeling_heuristics import classify_content, fallback_label
 
@@ -59,7 +60,7 @@ class ContentLabelingService:
             session.add(job)
             session.commit()
 
-        parent_map = self._build_parent_map(posts)
+        context_map = build_context_map(posts)
         totals = {"labeled": 0, "fallback": 0, "failed": 0}
         prompt = self._prompt_path.read_text(encoding="utf-8")
         batch_size = max(1, int(self._settings.label_batch_size))
@@ -72,14 +73,14 @@ class ContentLabelingService:
                 ai_candidates = []
 
                 for post in batch:
-                    parent_summary = parent_map.get(str(post.get("parent_post_id") or ""))
+                    context_bundle = build_record_context(post, context_map)
                     heuristic = classify_content(
                         record_type=str(post["record_type"]),
                         content=str(post.get("content_masked") or post.get("content") or ""),
-                        parent_summary=parent_summary,
+                        parent_summary=str(context_bundle.get("thread_context") or ""),
                         source_url=str(post.get("source_url") or ""),
                     )
-                    prepared.append((post, parent_summary))
+                    prepared.append((post, context_bundle))
                     if heuristic.should_skip_ai:
                         direct_labels[str(post["post_id"])] = dict(heuristic.payload)
                     else:
@@ -90,7 +91,9 @@ class ContentLabelingService:
                                 "content": str(post.get("content_masked") or post.get("content") or "")[:900],
                                 "source_url": post.get("source_url"),
                                 "parent_post_id": post.get("parent_post_id"),
-                                "parent_post_summary": parent_summary,
+                                "parent_post_summary": context_bundle.get("parent_post_summary"),
+                                "parent_comment_summary": context_bundle.get("parent_comment_summary"),
+                                "thread_context": context_bundle.get("thread_context"),
                                 "signals": heuristic.signals,
                                 "heuristic_prior": heuristic.payload,
                             }
@@ -102,7 +105,7 @@ class ContentLabelingService:
                     job = session.get(LabelJob, label_job_id)
                     if job is None:
                         raise ValueError("label job not found")
-                    for post, _parent_summary in prepared:
+                    for post, _context_bundle in prepared:
                         post_id = str(post["post_id"])
                         raw_payload = direct_labels.get(post_id) or ai_labels.get(post_id)
                         if raw_payload is None:
@@ -176,7 +179,7 @@ class ContentLabelingService:
         return results
 
     def _is_ai_eligible(self, post: CrawledPost) -> bool:
-        status = (post.pre_ai_status or "").upper()
+        status = (post.judge_decision or post.pre_ai_status or "").upper()
         if not status:
             return True
         if status == "ACCEPTED":
@@ -217,10 +220,3 @@ class ContentLabelingService:
         post.current_label_id = label_id
         post.label_status = "FALLBACK" if label.label_source == "fallback" else "LABELED"
         session.add(post)
-
-    def _build_parent_map(self, posts: list[dict[str, str | None]]) -> dict[str, str]:
-        parent_map: dict[str, str] = {}
-        for post in posts:
-            if post["record_type"] == "POST":
-                parent_map[str(post["post_id"])] = str(post.get("content_masked") or post.get("content") or "")[:240]
-        return parent_map

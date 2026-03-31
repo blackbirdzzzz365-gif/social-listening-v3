@@ -10,6 +10,7 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from app.domain.action_registry import get_action_spec
+from app.infra.ai_client import AIClient
 from app.infra.browser_agent import BrowserAgent, RawPost
 from app.infrastructure.database import SessionLocal
 from app.models.approval import ApprovalGrant
@@ -20,7 +21,8 @@ from app.models.run import PlanRun, StepRun
 from app.services.health_monitor import HealthMonitorService, utc_now_iso
 from app.services.label_job_service import LabelJobService, NO_ELIGIBLE_RECORDS_STATUS
 from app.services.planner import get_public_step_id
-from app.services.retrieval_quality import BatchHealthEvaluator, DeterministicRelevanceEngine, RetrievalProfileBuilder
+from app.services.research_gating import ModelJudgeService, Phase8BatchHealthEvaluator
+from app.services.retrieval_quality import DeterministicRelevanceEngine, RetrievalProfileBuilder
 
 
 @dataclass
@@ -38,6 +40,7 @@ class RunnerService:
         self,
         browser_agent: BrowserAgent,
         health_monitor: HealthMonitorService,
+        ai_client: AIClient,
         label_job_service: LabelJobService | None = None,
         settings: Any | None = None,
     ) -> None:
@@ -51,12 +54,8 @@ class RunnerService:
         self._history: dict[str, list[tuple[str, dict[str, Any]]]] = {}
         self._retrieval_profile_builder = RetrievalProfileBuilder()
         self._relevance_engine = DeterministicRelevanceEngine()
-        self._batch_evaluator = BatchHealthEvaluator(
-            continue_ratio=getattr(settings, "retrieval_continue_accepted_ratio", 0.25),
-            weak_ratio=getattr(settings, "retrieval_weak_accepted_ratio", 0.10),
-            weak_uncertain_ratio=getattr(settings, "retrieval_weak_uncertain_ratio", 0.20),
-            strong_accept_count=getattr(settings, "retrieval_strong_accept_count", 3),
-        )
+        self._model_judge = ModelJudgeService(ai_client, settings)
+        self._batch_evaluator = Phase8BatchHealthEvaluator(settings)
 
     async def start_run(self, plan_id: str, grant_id: str) -> dict[str, Any]:
         run_id = f"run-{uuid4().hex[:10]}"
@@ -448,7 +447,7 @@ class RunnerService:
                 if posts:
                     crawled_group_ids.append(group_id)
                 all_posts.extend(posts)
-                processed = self._process_candidates(
+                processed = await self._process_candidates(
                     run_id=run_id,
                     step_run_id=step_run.step_run_id,
                     records=posts,
@@ -568,7 +567,7 @@ class RunnerService:
                             source_group_id=p.get("source_group_id"),
                         )
                     )
-                processed = self._process_candidates(
+                processed = await self._process_candidates(
                     run_id=run_id,
                     step_run_id=step_run.step_run_id,
                     records=posts_as_raw,
@@ -637,7 +636,7 @@ class RunnerService:
                     source_group_id=post_ref.get("source_group_id"),
                 )
                 all_comments.extend(comments)
-                processed = self._process_candidates(
+                processed = await self._process_candidates(
                     run_id=run_id,
                     step_run_id=step_run.step_run_id,
                     records=comments,
@@ -690,7 +689,7 @@ class RunnerService:
                     for post in posts:
                         post["source_group_id"] = group_id
                     all_posts.extend(posts)
-                    processed = self._process_candidates(
+                    processed = await self._process_candidates(
                         run_id=run_id,
                         step_run_id=step_run.step_run_id,
                         records=posts,
@@ -971,7 +970,7 @@ class RunnerService:
             duplicate_count = duplicate_in_batch + duplicate_in_run
             return inserted_count, duplicate_count
 
-    def _process_candidates(
+    async def _process_candidates(
         self,
         *,
         run_id: str,
@@ -995,6 +994,7 @@ class RunnerService:
 
         batch_size = max(1, int(getattr(self._settings, "retrieval_batch_size", 20) or 20))
         profile = self._get_retrieval_profile_for_run(run_id)
+        validity_spec = self._get_validity_spec_for_run(run_id)
         parent_context = self._load_parent_context_map(run_id) if any(r.get("record_type") == "COMMENT" for r in records) else {}
         persisted_total = 0
         duplicate_total = 0
@@ -1013,19 +1013,86 @@ class RunnerService:
             scored_entries: list[dict[str, Any]] = []
             for raw in raw_batch:
                 raw["query_text"] = query_text
+                record_type = str(raw.get("record_type") or "POST")
                 parent_entry = parent_context.get(raw.get("parent_post_id") or "") or parent_context.get(raw.get("parent_post_url") or "")
-                score = self._relevance_engine.score(
+                hard_filter = self._model_judge.hard_filter(
+                    content=str(raw.get("content") or ""),
+                    record_type=record_type,
+                    validity_spec=validity_spec,
+                )
+                deterministic_score = self._relevance_engine.score(
                     content=str(raw.get("content") or ""),
                     retrieval_profile=profile,
-                    record_type=str(raw.get("record_type") or "POST"),
+                    record_type=record_type,
                     source_type=source_type,
                     query_family=query_family,
                     parent_text=(parent_entry or {}).get("content"),
                     parent_status=(parent_entry or {}).get("status"),
                 )
-                scored_entries.append({"raw": raw, "score": score})
+                if hard_filter.rejected:
+                    judge_result = self._model_judge.build_hard_reject_result(
+                        validity_spec=validity_spec,
+                        content_id=str(raw.get("post_id") or ""),
+                        filter_result=hard_filter,
+                    )
+                else:
+                    try:
+                        judge_result = await self._model_judge.judge_text(
+                            validity_spec=validity_spec,
+                            content_id=str(raw.get("post_id") or ""),
+                            content=hard_filter.cleaned_text,
+                            record_type=record_type,
+                            source_type=source_type,
+                            source_url=raw.get("source_url"),
+                            query_text=query_text,
+                            query_family=query_family,
+                            parent_context=parent_entry,
+                        )
+                        if self._model_judge.should_use_image_fallback(
+                            candidate=raw,
+                            initial_result=judge_result,
+                            validity_spec=validity_spec,
+                        ):
+                            image_summary, _image_meta = await self._model_judge.build_image_summary(
+                                candidate=raw,
+                                validity_spec=validity_spec,
+                            )
+                            if image_summary:
+                                judge_result = await self._model_judge.judge_text(
+                                    validity_spec=validity_spec,
+                                    content_id=str(raw.get("post_id") or ""),
+                                    content=hard_filter.cleaned_text,
+                                    record_type=record_type,
+                                    source_type=source_type,
+                                    source_url=raw.get("source_url"),
+                                    query_text=query_text,
+                                    query_family=query_family,
+                                    parent_context=parent_entry,
+                                    image_summary=image_summary,
+                                    used_image_understanding=True,
+                                )
+                    except Exception:
+                        judge_result = self._model_judge.fallback_from_retrieval_score(
+                            validity_spec=validity_spec,
+                            content_id=str(raw.get("post_id") or ""),
+                            score=deterministic_score,
+                            reason_prefix="model_judge_fallback",
+                        )
+                scored_entries.append(
+                    {
+                        "raw": raw,
+                        "judge_result": judge_result,
+                        "fallback_score": deterministic_score,
+                        "cleaned_text": hard_filter.cleaned_text,
+                        "quality_flags": hard_filter.quality_flags,
+                        "query_family": query_family,
+                    }
+                )
 
-            batch_health = self._batch_evaluator.evaluate([entry["score"] for entry in scored_entries])
+            batch_health = self._batch_evaluator.evaluate(
+                [entry["judge_result"] for entry in scored_entries],
+                validity_spec,
+            )
             total_accepted += batch_health.accepted_count
             total_scanned += len(raw_batch)
             if batch_health.decision == "weak":
@@ -1038,6 +1105,9 @@ class RunnerService:
                 consecutive_zero_accept_batches = 0
 
             batch_decision = "continue"
+            if batch_health.decision == "reformulate" and total_accepted == 0:
+                batch_decision = "reformulate"
+                stop_reason = "uncertain_reformulation_triggered"
             if consecutive_weak_batches >= int(getattr(self._settings, "retrieval_max_consecutive_weak_batches", 2)):
                 batch_decision = "stop"
                 stop_reason = "weak_batches_exceeded"
@@ -1075,7 +1145,7 @@ class RunnerService:
                 "stop_reason": stop_reason if batch_decision == "stop" else None,
             }
             batch_summaries.append(summary)
-            if batch_decision == "stop":
+            if batch_decision in {"stop", "reformulate"}:
                 break
 
         return {
@@ -1086,7 +1156,9 @@ class RunnerService:
             "batch_summaries": batch_summaries,
             "accepted_count": total_accepted,
             "scanned_count": total_scanned,
-            "should_reformulate": total_accepted == 0 and bool(batch_summaries) and batch_summaries[-1]["batch_decision"] == "stop",
+            "should_reformulate": total_accepted == 0
+            and bool(batch_summaries)
+            and batch_summaries[-1]["batch_decision"] in {"stop", "reformulate"},
             "stop_reason": stop_reason,
         }
 
@@ -1130,7 +1202,8 @@ class RunnerService:
             persisted_refs: list[dict[str, Any]] = []
             for dedupe_key, entry in incoming_by_key.items():
                 raw = entry["raw"]
-                score = entry["score"]
+                judge_result = entry["judge_result"]
+                fallback_score = entry["fallback_score"]
                 if dedupe_key in run_source_map:
                     duplicate_in_run += 1
                     continue
@@ -1147,7 +1220,11 @@ class RunnerService:
                 elif parent_post_id and parent_post_id in post_id_aliases:
                     parent_post_id = post_id_aliases[parent_post_id]
 
-                processing_stage = "CLEAN_ACCEPTED" if score.status in {"ACCEPTED", "UNCERTAIN"} else "SCORED_REJECTED"
+                processing_stage = (
+                    "CLEAN_ACCEPTED"
+                    if judge_result.decision in {"ACCEPTED", "UNCERTAIN"}
+                    else "SCORED_REJECTED"
+                )
                 session.add(
                     CrawledPost(
                         post_id=post_id,
@@ -1155,7 +1232,7 @@ class RunnerService:
                         step_run_id=step_run_id,
                         group_id_hash=raw["group_id_hash"],
                         content=raw["content"],
-                        content_masked=score.cleaned_text,
+                        content_masked=entry.get("cleaned_text") or fallback_score.cleaned_text,
                         record_type=raw.get("record_type", "POST"),
                         source_url=raw.get("source_url"),
                         parent_post_id=parent_post_id,
@@ -1164,17 +1241,42 @@ class RunnerService:
                         reaction_count=raw.get("reaction_count", 0),
                         comment_count=raw.get("comment_count", 0),
                         processing_stage=processing_stage,
-                        pre_ai_status=score.status,
-                        pre_ai_score=score.score_total,
-                        pre_ai_reason=score.reason,
-                        score_breakdown_json=json.dumps(score.score_breakdown),
-                        quality_flags_json=json.dumps(score.quality_flags),
-                        query_family=score.query_family,
+                        pre_ai_status=judge_result.decision,
+                        pre_ai_score=judge_result.relevance_score,
+                        pre_ai_reason=";".join(judge_result.reason_codes) or judge_result.short_rationale,
+                        judge_decision=judge_result.decision,
+                        judge_relevance_score=judge_result.relevance_score,
+                        judge_confidence_score=judge_result.confidence_score,
+                        judge_reason_codes_json=json.dumps(judge_result.reason_codes, ensure_ascii=False),
+                        judge_rationale=judge_result.short_rationale,
+                        judge_used_image_understanding=judge_result.used_image_understanding,
+                        judge_image_summary=judge_result.image_summary,
+                        judge_model_family=judge_result.model_family,
+                        judge_model_version=judge_result.model_version,
+                        judge_policy_version=judge_result.policy_version,
+                        judge_cache_key=judge_result.cache_key,
+                        score_breakdown_json=json.dumps(
+                            {
+                                "judge_reason_codes": judge_result.reason_codes,
+                                "judge_raw": judge_result.raw_response,
+                                "fallback_score_breakdown": fallback_score.score_breakdown,
+                            },
+                            ensure_ascii=False,
+                        ),
+                        quality_flags_json=json.dumps(
+                            entry.get("quality_flags") or fallback_score.quality_flags,
+                            ensure_ascii=False,
+                        ),
+                        query_family=entry.get("query_family") or fallback_score.query_family,
                         source_type=source_type,
                         source_batch_index=batch_index,
                         batch_decision=batch_decision,
-                        is_excluded=score.status == "REJECTED",
-                        exclude_reason=score.reason if score.status == "REJECTED" else None,
+                        provider_used=judge_result.provider_used,
+                        fallback_used=judge_result.fallback_used,
+                        is_excluded=judge_result.decision == "REJECTED",
+                        exclude_reason=(";".join(judge_result.reason_codes) or judge_result.short_rationale)
+                        if judge_result.decision == "REJECTED"
+                        else None,
                     )
                 )
                 if raw.get("source_url"):
@@ -1186,9 +1288,13 @@ class RunnerService:
                         "post_id": post_id,
                         "post_url": raw.get("source_url"),
                         "source_group_id": raw.get("source_group_id"),
-                        "pre_ai_status": score.status,
-                        "pre_ai_score": score.score_total,
-                        "query_family": score.query_family,
+                        "pre_ai_status": judge_result.decision,
+                        "pre_ai_score": judge_result.relevance_score,
+                        "judge_decision": judge_result.decision,
+                        "judge_relevance_score": judge_result.relevance_score,
+                        "judge_confidence_score": judge_result.confidence_score,
+                        "judge_reason_codes": judge_result.reason_codes,
+                        "query_family": entry.get("query_family") or fallback_score.query_family,
                         "query_text": raw.get("query_text") or "",
                     }
                 )
@@ -1212,12 +1318,31 @@ class RunnerService:
             except json.JSONDecodeError:
                 return {}
 
+    def _get_validity_spec_for_run(self, run_id: str) -> dict[str, Any]:
+        with SessionLocal() as session:
+            run = session.get(PlanRun, run_id)
+            if run is None:
+                return {}
+            plan = session.get(Plan, run.plan_id)
+            if plan is None:
+                return {}
+            context = session.get(ProductContext, plan.context_id)
+            if context is None or not context.validity_spec_json:
+                return {}
+            try:
+                return json.loads(context.validity_spec_json)
+            except json.JSONDecodeError:
+                return {}
+
     def _load_parent_context_map(self, run_id: str) -> dict[str, dict[str, str]]:
         with SessionLocal() as session:
             posts = session.scalars(select(CrawledPost).where(CrawledPost.run_id == run_id)).all()
         context_map: dict[str, dict[str, str]] = {}
         for post in posts:
-            payload = {"content": post.content_masked or post.content, "status": post.pre_ai_status or "ACCEPTED"}
+            payload = {
+                "content": post.content_masked or post.content,
+                "status": post.judge_decision or post.pre_ai_status or "ACCEPTED",
+            }
             context_map[post.post_id] = payload
             if post.source_url:
                 context_map[post.source_url] = payload
