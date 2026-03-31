@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pydantic import BaseModel
 
 
@@ -9,4 +11,3 @@ class HealthStatusResponse(BaseModel):
 
 class HealthResetResponse(BaseModel):
     status: str
-

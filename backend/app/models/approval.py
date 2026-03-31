@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import Optional
+
 from sqlalchemy import Boolean, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -17,7 +21,7 @@ class ApprovalGrant(Base):
         nullable=False,
         server_default="CURRENT_TIMESTAMP",
     )
-    expires_at: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[Optional[str]] = mapped_column(Text)
     invalidated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    invalidated_at: Mapped[str | None] = mapped_column(Text)
-    invalidated_reason: Mapped[str | None] = mapped_column(Text)
+    invalidated_at: Mapped[Optional[str]] = mapped_column(Text)
+    invalidated_reason: Mapped[Optional[str]] = mapped_column(Text)

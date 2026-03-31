@@ -1,0 +1,16 @@
+{
+  "cp": "cp1-validity-spec-builder",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-03-31T16:29:52+0700",
+  "summary": "Added a versioned validity-spec contract, builder service, planner integration, and session API exposure.",
+  "artifacts": [
+    "backend/app/schemas/phase8.py",
+    "backend/app/services/research_gating.py",
+    "backend/app/services/planner.py",
+    "backend/app/api/plans.py",
+    "backend/app/skills/validity_spec_builder.md"
+  ],
+  "issues": [],
+  "notes": "Session responses now include validity_spec and persisted contexts now store validity_spec_json."
+}

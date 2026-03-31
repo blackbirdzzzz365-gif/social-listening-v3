@@ -1,0 +1,15 @@
+{
+  "cp": "cp5-comment-policy-gating",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-03-31T16:29:52+0700",
+  "summary": "Applied comment-specific hard gating and removed the previous unconditional comment eligibility in labeling/theme pipelines.",
+  "artifacts": [
+    "backend/app/services/research_gating.py",
+    "backend/app/services/label_job_service.py",
+    "backend/app/services/content_labeling.py",
+    "backend/app/services/insight.py"
+  ],
+  "issues": [],
+  "notes": "Transactional-only comments are now rejectable before downstream AI stages when the validity spec requires it."
+}

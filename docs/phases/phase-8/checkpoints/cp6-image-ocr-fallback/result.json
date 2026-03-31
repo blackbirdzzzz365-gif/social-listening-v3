@@ -1,0 +1,16 @@
+{
+  "cp": "cp6-image-ocr-fallback",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-03-31T16:29:52+0700",
+  "summary": "Added conditional image/OCR fallback hooks, image summary aggregation, and judge metadata persistence.",
+  "artifacts": [
+    "backend/app/services/research_gating.py",
+    "backend/app/skills/image_understanding.md",
+    "backend/tests/test_phase8_gating.py"
+  ],
+  "issues": [
+    "Browser extraction layer does not yet populate image metadata, so the fallback path was validated by unit tests but not exercised in the final smoke run."
+  ],
+  "notes": "The runtime contract is ready for future image_urls/image_ocr_text/image_alt_text inputs."
+}

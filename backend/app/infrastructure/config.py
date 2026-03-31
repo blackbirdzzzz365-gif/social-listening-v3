@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from functools import lru_cache
 from pathlib import Path
 
@@ -40,6 +42,12 @@ class Settings(BaseSettings):
     plan_generation_thinking: bool = False
     plan_refinement_model: str = "gpt-4o"
     plan_refinement_thinking: bool = False
+    validity_spec_model: str = "gpt-4o"
+    validity_spec_thinking: bool = False
+    content_judge_model: str = "gpt-4o-mini"
+    content_judge_thinking: bool = False
+    image_fallback_model: str = "gpt-4o-mini"
+    image_fallback_thinking: bool = False
     theme_analysis_model: str = "gpt-4o"
     content_labeling_model: str = "gpt-4o"
     label_taxonomy_version: str = "v1"
@@ -55,11 +63,13 @@ class Settings(BaseSettings):
     retrieval_max_scanned_per_path: int = 60
     retrieval_max_query_variants: int = 2
     pre_ai_mode: str = "strict"
+    judge_high_confidence_threshold: float = 0.75
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        extra="ignore",
     )
 
 

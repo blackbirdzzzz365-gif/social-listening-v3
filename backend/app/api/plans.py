@@ -46,6 +46,7 @@ def _to_session_response(result) -> SessionResponse:
         clarifying_questions=result.clarifying_questions,
         keywords=result.keywords,
         retrieval_profile=result.retrieval_profile,
+        validity_spec=result.validity_spec,
         clarification_history=result.clarification_history,
     )
 

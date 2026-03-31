@@ -1,0 +1,14 @@
+{
+  "cp": "cp5-comment-policy-gating",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-03-31T16:29:52+0700",
+  "summary": "Comment gating is now policy-driven and no longer bypasses downstream eligibility by default.",
+  "checks": [
+    "Comment transactional-only hard reject is unit-tested.",
+    "Labeling/theme eligibility now uses judge_decision first, then pre_ai fallback."
+  ],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp6-image-ocr-fallback"
+}

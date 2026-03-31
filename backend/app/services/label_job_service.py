@@ -184,12 +184,16 @@ class LabelJobService:
         return {"run_id": run_id, "label_filter": label_filter, "records": samples}
 
     def _eligible_condition(self):
+        judge_status = func.coalesce(CrawledPost.judge_decision, CrawledPost.pre_ai_status)
         if self._settings.pre_ai_mode.lower() == "balanced":
             return or_(
-                CrawledPost.pre_ai_status.is_(None),
-                CrawledPost.pre_ai_status.in_(("ACCEPTED", "UNCERTAIN")),
+                judge_status.is_(None),
+                judge_status.in_(("ACCEPTED", "UNCERTAIN")),
             )
-        return or_(CrawledPost.pre_ai_status.is_(None), CrawledPost.pre_ai_status == "ACCEPTED")
+        return or_(
+            judge_status.is_(None),
+            judge_status == "ACCEPTED",
+        )
 
     async def resume_incomplete_jobs(self) -> None:
         with SessionLocal() as session:

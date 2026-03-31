@@ -1,0 +1,16 @@
+{
+  "cp": "cp6-image-ocr-fallback",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-03-31T16:29:52+0700",
+  "summary": "Image/OCR fallback hooks are implemented and unit-tested, with residual runtime coverage gap due missing browser image metadata.",
+  "checks": [
+    "Image fallback trigger logic is unit-tested.",
+    "Image summary aggregation path is unit-tested."
+  ],
+  "issues": [
+    "Final smoke run did not set judge_used_image_understanding because no crawled records carried image metadata."
+  ],
+  "ready_for_next_cp": true,
+  "next_cp": "cp7-phase8-smoke-audit"
+}

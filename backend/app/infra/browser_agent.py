@@ -495,6 +495,14 @@ class BrowserAgent:
         group_hash = self._resolve_group_hash(source_group, fallback_seed=parent_id)
         articles = await self._page.locator('[role="article"]').all()
         comments: list[RawPost] = []
+        comment_stack: list[dict[str, Any]] = [
+            {
+                "post_id": parent_id,
+                "source_url": post_url,
+                "indent": -1.0,
+            }
+        ]
+        baseline_indent: float | None = None
         for index, article in enumerate(articles[1:], start=1):
             if len(comments) >= target_count:
                 break
@@ -506,24 +514,44 @@ class BrowserAgent:
                 article,
                 ['a[href*="comment_id="]', 'a[href*="/posts/"]', 'a[href*="/permalink/"]'],
             )
+            bounding_box = await article.bounding_box()
+            absolute_indent = float((bounding_box or {}).get("x") or 0.0)
+            if baseline_indent is None:
+                baseline_indent = absolute_indent
+            normalized_indent = max(0.0, absolute_indent - baseline_indent)
+            while len(comment_stack) > 1 and normalized_indent <= (comment_stack[-1]["indent"] + 8.0):
+                comment_stack.pop()
+            parent_ref = comment_stack[0]
+            if len(comment_stack) > 1 and normalized_indent >= (comment_stack[-1]["indent"] + 18.0):
+                parent_ref = comment_stack[-1]
+            else:
+                comment_stack = comment_stack[:1]
+            comment_id = self._comment_id_from_context(
+                parent_post_id=parent_ref["post_id"],
+                comment_url=comment_url,
+                comment_text=masked,
+                ordinal=index,
+            )
             comments.append(
                 RawPost(
-                    post_id=self._comment_id_from_context(
-                        parent_post_id=parent_id,
-                        comment_url=comment_url,
-                        comment_text=masked,
-                        ordinal=index,
-                    ),
+                    post_id=comment_id,
                     group_id_hash=group_hash,
                     content=masked,
                     record_type="COMMENT",
-                    source_url=comment_url or post_url,
-                    parent_post_id=parent_id,
-                    parent_post_url=post_url,
+                    source_url=comment_url,
+                    parent_post_id=parent_ref["post_id"],
+                    parent_post_url=parent_ref.get("source_url") or post_url,
                     posted_at=None,
                     reaction_count=0,
                     comment_count=0,
                 )
+            )
+            comment_stack.append(
+                {
+                    "post_id": comment_id,
+                    "source_url": comment_url,
+                    "indent": normalized_indent,
+                }
             )
         return comments
 
@@ -1219,37 +1247,45 @@ class BrowserAgent:
         parent_id = self._post_id_from_url(post_url)
         group_hash = self._resolve_group_hash(source_group_id, fallback_seed=parent_id)
         samples = [
-            "Minh cung gap tinh trang nay, phi cao qua.",
-            "Ban thu goi hotline 1800 xxxx, ho tro nhanh lam.",
-            "Dung roi, cashback thang nay bi tinh sai.",
-            "Cam on ban da chia se, minh se thu.",
-            "Minh thay ok ma, co le do khu vuc.",
-            "Co ai duoc mien phi nam dau khong vay?",
-            "Lam online nhanh hon ra quay nhieu.",
-            "Ban dung the bao lau roi?",
+            {"text": "Minh cung gap tinh trang nay, phi cao qua.", "parent_key": "post"},
+            {"text": "Minh cung bi sau khi gia han thang truoc.", "parent_key": "c1"},
+            {"text": "Ban thu goi hotline 1800 xxxx, ho tro nhanh lam.", "parent_key": "post"},
+            {"text": "Dung roi, cashback thang nay bi tinh sai.", "parent_key": "post"},
+            {"text": "Cam on ban da chia se, minh se thu.", "parent_key": "c4"},
+            {"text": "Minh thay ok ma, co le do khu vuc.", "parent_key": "post"},
+            {"text": "Co ai duoc mien phi nam dau khong vay?", "parent_key": "post"},
+            {"text": "Ban dung the bao lau roi?", "parent_key": "c7"},
         ]
         comments: list[RawPost] = []
-        for index, text in enumerate(samples[:target_count], start=1):
+        comment_refs: dict[str, dict[str, str]] = {
+            "post": {"post_id": parent_id, "source_url": post_url},
+        }
+        for index, sample in enumerate(samples[:target_count], start=1):
+            text = str(sample["text"])
+            parent_key = str(sample["parent_key"])
+            parent_ref = comment_refs.get(parent_key, comment_refs["post"])
             comment_url = f"{post_url}?comment_id=200000000000{index}"
+            comment_id = self._comment_id_from_context(
+                parent_post_id=parent_ref["post_id"],
+                comment_url=comment_url,
+                comment_text=text,
+                ordinal=index,
+            )
             comments.append(
                 RawPost(
-                    post_id=self._comment_id_from_context(
-                        parent_post_id=parent_id,
-                        comment_url=comment_url,
-                        comment_text=text,
-                        ordinal=index,
-                    ),
+                    post_id=comment_id,
                     group_id_hash=group_hash,
                     content=self._pii_masker.mask(text),
                     record_type="COMMENT",
                     source_url=comment_url,
-                    parent_post_id=parent_id,
-                    parent_post_url=post_url,
+                    parent_post_id=parent_ref["post_id"],
+                    parent_post_url=parent_ref["source_url"],
                     posted_at=f"2026-03-28T12:{index:02d}:00+07:00",
                     reaction_count=index,
                     comment_count=0,
                 )
             )
+            comment_refs[f"c{index}"] = {"post_id": comment_id, "source_url": comment_url}
         return comments
 
     def _build_mock_in_group_posts(self, group_id: str, query: str, target_count: int) -> list[RawPost]:

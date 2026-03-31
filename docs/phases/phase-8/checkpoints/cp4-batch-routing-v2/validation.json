@@ -1,0 +1,14 @@
+{
+  "cp": "cp4-batch-routing-v2",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-03-31T16:29:52+0700",
+  "summary": "Batch routing now evaluates accept, uncertain, and high-confidence acceptance signals from judge results.",
+  "checks": [
+    "Unit tests cover continue, reformulate, and weak decisions.",
+    "Smoke run checkpoint payloads include confidence-aware batch summaries."
+  ],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp5-comment-policy-gating"
+}

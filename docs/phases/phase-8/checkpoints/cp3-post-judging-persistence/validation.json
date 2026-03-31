@@ -1,0 +1,15 @@
+{
+  "cp": "cp3-post-judging-persistence",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-03-31T16:29:52+0700",
+  "summary": "Runner now persists Phase 8 judge fields and keeps legacy pre_ai compatibility for downstream systems.",
+  "checks": [
+    "Alembic migration 012 adds validity_spec and judge columns.",
+    "Runner writes judge_* and pre_ai_* fields together.",
+    "Final smoke DB shows judge_decision_present=36/36."
+  ],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp4-batch-routing-v2"
+}

@@ -8,7 +8,10 @@ from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
-import anthropic
+try:
+    import anthropic
+except ModuleNotFoundError:  # pragma: no cover - optional dependency in local dev
+    anthropic = None  # type: ignore[assignment]
 
 from app.infrastructure.config import Settings
 
@@ -50,7 +53,9 @@ class AIClient:
         self._anthropic_api_key = settings.anthropic_api_key.strip()
         self._retry_count = max(0, int(settings.ai_provider_retry_count))
         self._anthropic_client = (
-            anthropic.AsyncAnthropic(api_key=self._anthropic_api_key) if self._anthropic_api_key else None
+            anthropic.AsyncAnthropic(api_key=self._anthropic_api_key)
+            if self._anthropic_api_key and anthropic is not None
+            else None
         )
 
     async def call(
@@ -270,7 +275,7 @@ class AIClient:
                 "budget_tokens": 2048,
             }
             if thinking
-            else anthropic.NOT_GIVEN,
+            else anthropic.NOT_GIVEN if anthropic is not None else None,
             stream=stream,
         )
         text_blocks = [block.text for block in message.content if getattr(block, "type", "") == "text"]
@@ -309,6 +314,15 @@ class AIClient:
         if "PLAN_REFINEMENT" in system_prompt:
             payload = json.loads(user_input)
             return self._mock_plan_refinement(payload)
+        if "VALIDITY_SPEC_BUILDER" in system_prompt:
+            payload = json.loads(user_input)
+            return self._mock_validity_spec(payload)
+        if "CONTENT_VALIDITY_JUDGE" in system_prompt:
+            payload = json.loads(user_input)
+            return self._mock_content_validity_judge(payload)
+        if "IMAGE_UNDERSTANDING" in system_prompt:
+            payload = json.loads(user_input)
+            return self._mock_image_understanding(payload)
         if "CONTENT_LABELING" in system_prompt:
             payload = json.loads(user_input)
             return self._mock_content_labeling(payload)
@@ -694,6 +708,134 @@ class AIClient:
         ]
         themes.sort(key=lambda item: item["post_count"], reverse=True)
         return {"themes": themes}
+
+    def _mock_validity_spec(self, payload: dict[str, Any]) -> dict[str, Any]:
+        topic = str(payload.get("topic") or "research").strip()
+        keywords = payload.get("keywords") or {}
+        pain_points = keywords.get("pain_points") or []
+        comparison = keywords.get("comparison") or []
+        objective = payload.get("plan_intent") or f"Find research-useful end-user discussion about {topic}."
+        return {
+            "research_objective": objective,
+            "target_signal_types": [
+                "end_user_experience",
+                "pain_point",
+                "comparison",
+                "question_with_problem_context",
+            ],
+            "target_author_types": ["end_user"],
+            "non_target_author_types": ["brand_official", "seller_affiliate"],
+            "must_have_signals": [
+                f"clear user-relevant signal about {topic}",
+                "experience, problem, comparison, or concrete question",
+            ],
+            "nice_to_have_signals": (pain_points + comparison)[:6],
+            "hard_reject_signals": [
+                "pure promotion",
+                "seller cta",
+                "price-only inquiry",
+                "inbox-only request",
+                "duplicate thread noise",
+            ],
+            "comment_policy": {
+                "allow_parent_context": True,
+                "reject_transactional_only_comments": True,
+                "minimum_comment_text_length": 8,
+            },
+            "valid_examples": [
+                f"Minh da dung {topic} va gap van de cu the.",
+                f"So sanh {topic} voi lua chon khac dua tren trai nghiem that.",
+            ],
+            "invalid_examples": [
+                "Inbox de nhan gia.",
+                "Con hang, ship toan quoc.",
+            ],
+            "batch_policy": {
+                "min_accept_ratio": 0.15,
+                "min_high_conf_accept_ratio": 0.05,
+                "max_consecutive_weak_batches": 2,
+                "uncertain_reformulation_floor": 0.25,
+            },
+        }
+
+    def _mock_content_validity_judge(self, payload: dict[str, Any]) -> dict[str, Any]:
+        candidate = payload.get("candidate") or {}
+        text = self._normalize_text(candidate.get("content") or "")
+        record_type = str(candidate.get("record_type") or "POST").upper()
+        parent_context = candidate.get("parent_context") or {}
+        image_summary = self._normalize_text(candidate.get("image_summary") or "")
+        transactional = any(marker in text for marker in ("xin gia", "gia bn", "ib", "inbox", "check ib", "con hang"))
+        promotional = any(marker in text for marker in ("sale", "khuyen mai", "uu dai", "ref", "dai ly", "order"))
+        experiential = any(
+            marker in text
+            for marker in ("minh", "mình", "da dung", "trai nghiem", "bị", "bi", "gap", "gặp", "da mun", "phi", "loi")
+        )
+        comparison = any(marker in text for marker in ("so sanh", "vs", "tot hon", "hơn"))
+        question = "?" in str(candidate.get("content") or "") or any(marker in text for marker in ("co ai", "cho em hoi", "cho minh hoi"))
+        parent_support = self._normalize_text(json.dumps(parent_context, ensure_ascii=False))
+
+        decision = "UNCERTAIN"
+        relevance = 0.42
+        confidence = 0.58
+        reason_codes = ["mixed_signal"]
+        rationale = "Tin hieu chua du ro."
+
+        if promotional or transactional:
+            decision = "REJECTED"
+            relevance = 0.08
+            confidence = 0.9
+            reason_codes = ["commercial_noise"]
+            rationale = "Noi dung mang tinh giao dich."
+        elif experiential or comparison:
+            decision = "ACCEPTED"
+            relevance = 0.86
+            confidence = 0.82
+            reason_codes = ["experience_signal", "non_commercial"]
+            rationale = "Co trai nghiem hoac so sanh cu the."
+        elif record_type == "COMMENT" and question and parent_support:
+            decision = "UNCERTAIN"
+            relevance = 0.48
+            confidence = 0.62
+            reason_codes = ["comment_depends_on_thread"]
+            rationale = "Comment can them context."
+        elif image_summary:
+            decision = "ACCEPTED"
+            relevance = 0.74
+            confidence = 0.72
+            reason_codes = ["visual_signal_present"]
+            rationale = "Image bo sung them tin hieu lien quan."
+
+        return {
+            "decision": decision,
+            "relevance_score": relevance,
+            "confidence_score": confidence,
+            "reason_codes": reason_codes,
+            "short_rationale": rationale,
+            "used_image_understanding": bool(image_summary),
+            "image_summary": candidate.get("image_summary") or "",
+            "model_family": "mock-judge",
+            "model_version": "mock-v1",
+            "policy_version": "judge-policy-v1",
+        }
+
+    def _mock_image_understanding(self, payload: dict[str, Any]) -> dict[str, Any]:
+        image_context = payload.get("image_context") or {}
+        ocr_text = str(image_context.get("image_ocr_text") or "").strip()
+        alt_text = str(image_context.get("image_alt_text") or "").strip()
+        image_summary = str(image_context.get("image_summary") or "").strip()
+        summary = image_summary or alt_text or ocr_text
+        signals = []
+        if ocr_text:
+            signals.append("ocr_text_present")
+        if alt_text:
+            signals.append("alt_text_present")
+        if image_context.get("image_urls"):
+            signals.append("image_reference_present")
+        return {
+            "image_summary": summary[:240],
+            "ocr_text": ocr_text[:240],
+            "signals": signals,
+        }
 
     def _normalize_text(self, text: str) -> str:
         return re.sub(r"\s+", " ", text.strip().lower())
