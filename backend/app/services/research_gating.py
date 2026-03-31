@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import json
+import mimetypes
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean
 from typing import Any
+from urllib import request as urllib_request
 
 from app.infra.ai_client import AIClient
 from app.infrastructure.config import Settings
@@ -137,6 +141,7 @@ class ValiditySpecBuilder:
                     ensure_ascii=False,
                 ),
                 thinking=self._settings.validity_spec_thinking,
+                provider_slot="judge",
             )
         except Exception:
             response = {}
@@ -414,6 +419,7 @@ class ModelJudgeService:
                 ensure_ascii=False,
             ),
             thinking=self._settings.content_judge_thinking,
+            provider_slot="judge",
         )
         provider_meta = response.get("_provider_meta", {}) if isinstance(response, dict) else {}
         return self._normalize_judge_result(
@@ -452,22 +458,61 @@ class ModelJudgeService:
         image_context = self._extract_image_context(candidate)
         if not image_context:
             return "", {}
-        response = await self._ai_client.call(
-            model=self._settings.image_fallback_model,
-            system_prompt=prompt,
-            user_input=json.dumps(
-                {
-                    "validity_spec": validity_spec,
-                    "image_context": image_context,
-                    "content_hint": candidate.get("content"),
-                },
-                ensure_ascii=False,
-            ),
-            thinking=self._settings.image_fallback_thinking,
+        image_data_urls = await self._materialize_image_data_urls(image_context)
+        user_input = json.dumps(
+            {
+                "validity_spec": validity_spec,
+                "image_context": image_context,
+                "content_hint": candidate.get("content"),
+            },
+            ensure_ascii=False,
         )
-        summary = str(response.get("image_summary") or "").strip()
-        ocr_text = str(response.get("ocr_text") or "").strip()
-        signals = response.get("signals") if isinstance(response.get("signals"), list) else []
+        user_content = self._build_image_user_content(
+            image_context=image_context,
+            image_data_urls=image_data_urls,
+            validity_spec=validity_spec,
+            content_hint=str(candidate.get("content") or ""),
+        )
+        summary = ""
+        ocr_text = ""
+        signals: list[str] = []
+        try:
+            response = await self._ai_client.call(
+                model=self._settings.image_fallback_model,
+                system_prompt=prompt,
+                user_input=user_input,
+                thinking=self._settings.image_fallback_thinking,
+                provider_slot="ocr",
+                user_content=user_content,
+            )
+            summary = str(response.get("image_summary") or "").strip()
+            ocr_text = str(response.get("ocr_text") or "").strip()
+            signals = response.get("signals") if isinstance(response.get("signals"), list) else []
+        except Exception:
+            raw_text, _provider_meta = await self._ai_client.call_text(
+                model=self._settings.image_fallback_model,
+                system_prompt=(
+                    "IMAGE_UNDERSTANDING_RAW\n"
+                    "Extract OCR text and the most relevant image signals.\n"
+                    "Return plain text only. No markdown. No JSON."
+                ),
+                user_input=user_input,
+                thinking=False,
+                provider_slot="ocr",
+                user_content=user_content,
+            )
+            cleaned_raw = re.sub(r"\s+", " ", str(raw_text or "")).strip()
+            ocr_text = cleaned_raw[:800]
+            if ocr_text:
+                signals.append("raw_ocr_fallback")
+                summary = ocr_text[:240]
+        if not ocr_text:
+            fallback_ocr = str(image_context.get("image_ocr_text") or "").strip()
+            if fallback_ocr:
+                ocr_text = fallback_ocr[:800]
+                signals.append("candidate_ocr_text_present")
+        if not summary:
+            summary = str(image_context.get("image_summary") or image_context.get("image_alt_text") or "").strip()[:240]
         merged_summary = summary
         if ocr_text:
             merged_summary = f"{summary} OCR: {ocr_text}".strip()
@@ -578,6 +623,71 @@ class ModelJudgeService:
         if not payload["image_urls"] and not image_ocr_text and not image_alt_text and not image_summary:
             return {}
         return payload
+
+    def _build_image_user_content(
+        self,
+        *,
+        image_context: dict[str, Any],
+        image_data_urls: list[str],
+        validity_spec: dict[str, Any],
+        content_hint: str,
+    ) -> list[dict[str, Any]]:
+        text_payload = {
+            "validity_spec": validity_spec,
+            "content_hint": content_hint[:1000],
+            "image_context": {
+                "image_ocr_text": image_context.get("image_ocr_text", ""),
+                "image_alt_text": image_context.get("image_alt_text", ""),
+                "image_summary": image_context.get("image_summary", ""),
+            },
+            "task": "Summarize image-derived signals and OCR text relevant to judging research relevance.",
+        }
+        content: list[dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": json.dumps(text_payload, ensure_ascii=False),
+            }
+        ]
+        for image_url in image_data_urls[:3]:
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": str(image_url)},
+                }
+            )
+        return content
+
+    async def _materialize_image_data_urls(self, image_context: dict[str, Any]) -> list[str]:
+        image_urls = [str(item).strip() for item in image_context.get("image_urls", []) if str(item).strip()]
+        if not image_urls:
+            return []
+        data_urls: list[str] = []
+        for image_url in image_urls[:3]:
+            try:
+                data_url = await asyncio.to_thread(self._fetch_image_as_data_url, image_url)
+            except Exception:
+                continue
+            if data_url:
+                data_urls.append(data_url)
+        return data_urls
+
+    def _fetch_image_as_data_url(self, image_url: str) -> str:
+        request = urllib_request.Request(
+            image_url,
+            headers={
+                "User-Agent": "Mozilla/5.0",
+            },
+        )
+        with urllib_request.urlopen(request, timeout=15) as response:
+            body = response.read(4 * 1024 * 1024 + 1)
+            if len(body) > 4 * 1024 * 1024:
+                raise ValueError("Image too large for OCR payload")
+            content_type = response.headers.get_content_type() or ""
+        if not content_type or content_type == "application/octet-stream":
+            guessed, _ = mimetypes.guess_type(image_url)
+            content_type = guessed or "image/jpeg"
+        encoded = base64.b64encode(body).decode("ascii")
+        return f"data:{content_type};base64,{encoded}"
 
     def _is_transactional_only_comment(self, normalized_content: str) -> bool:
         if not normalized_content:

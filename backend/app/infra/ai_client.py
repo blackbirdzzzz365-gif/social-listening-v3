@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import re
 import socket
+import threading
+import time
+from dataclasses import dataclass
 from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
@@ -33,7 +37,9 @@ class ProviderTransportError(ProviderExecutionError):
 
 
 class ProviderRateLimitError(ProviderExecutionError):
-    pass
+    def __init__(self, message: str, *, retry_after_sec: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after_sec = retry_after_sec
 
 
 class ProviderServerError(ProviderExecutionError):
@@ -44,6 +50,16 @@ class ProviderEnvelopeError(ProviderExecutionError):
     pass
 
 
+@dataclass(frozen=True)
+class ProviderConfig:
+    slot: str
+    provider_name: str
+    api_key: str
+    base_url: str
+    timeout_sec: float
+    retry_count: int
+
+
 class AIClient:
     def __init__(self, settings: Settings) -> None:
         self._marketplace_api_key = settings.openai_compatible_api_key.strip()
@@ -52,6 +68,49 @@ class AIClient:
         self._fallback_model = settings.anthropic_fallback_model
         self._anthropic_api_key = settings.anthropic_api_key.strip()
         self._retry_count = max(0, int(settings.ai_provider_retry_count))
+        self._rate_limit_cooldown_sec = max(1.0, float(settings.ai_rate_limit_cooldown_sec))
+        self._rate_limit_until = 0.0
+        self._rate_limit_lock = threading.Lock()
+        self._provider_configs = {
+            "default": ProviderConfig(
+                slot="default",
+                provider_name="chiasegpu",
+                api_key=self._marketplace_api_key,
+                base_url=self._marketplace_base_url,
+                timeout_sec=self._marketplace_timeout_sec,
+                retry_count=self._retry_count,
+            ),
+            "judge": ProviderConfig(
+                slot="judge",
+                provider_name="chiasegpu-judge",
+                api_key=settings.phase8_judge_api_key.strip() or self._marketplace_api_key,
+                base_url=(settings.phase8_judge_api_base_url or self._marketplace_base_url).rstrip("/"),
+                timeout_sec=max(1.0, float(settings.phase8_judge_api_timeout_sec or self._marketplace_timeout_sec)),
+                retry_count=max(
+                    0,
+                    int(
+                        self._retry_count
+                        if settings.phase8_judge_api_retry_count is None
+                        else settings.phase8_judge_api_retry_count
+                    ),
+                ),
+            ),
+            "ocr": ProviderConfig(
+                slot="ocr",
+                provider_name="chiasegpu-ocr",
+                api_key=settings.phase8_ocr_api_key.strip() or settings.phase8_judge_api_key.strip() or self._marketplace_api_key,
+                base_url=(settings.phase8_ocr_api_base_url or settings.phase8_judge_api_base_url or self._marketplace_base_url).rstrip("/"),
+                timeout_sec=max(1.0, float(settings.phase8_ocr_api_timeout_sec or settings.phase8_judge_api_timeout_sec or self._marketplace_timeout_sec)),
+                retry_count=max(
+                    0,
+                    int(
+                        self._retry_count
+                        if settings.phase8_ocr_api_retry_count is None
+                        else settings.phase8_ocr_api_retry_count
+                    ),
+                ),
+            ),
+        }
         self._anthropic_client = (
             anthropic.AsyncAnthropic(api_key=self._anthropic_api_key)
             if self._anthropic_api_key and anthropic is not None
@@ -66,6 +125,8 @@ class AIClient:
         *,
         stream: bool = False,
         thinking: bool = False,
+        provider_slot: str = "default",
+        user_content: str | list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         try:
             content, provider_meta = await self._request_text(
@@ -74,6 +135,8 @@ class AIClient:
                 user_input=user_input,
                 thinking=thinking,
                 stream=stream,
+                provider_slot=provider_slot,
+                user_content=user_content,
             )
         except RuntimeError:
             response = self._mock_response(system_prompt=system_prompt, user_input=user_input)
@@ -84,6 +147,7 @@ class AIClient:
                 "fallback_model": self._fallback_model,
                 "attempt_count": 0,
                 "failure_reason": "no_provider_configured",
+                "provider_slot": provider_slot,
             }
             return response
 
@@ -92,7 +156,11 @@ class AIClient:
             parsed["_provider_meta"] = provider_meta
             return parsed
         except ValueError as parse_error:
-            repaired, repair_meta = await self._repair_json_response(model=model, malformed_content=content)
+            repaired, repair_meta = await self._repair_json_response(
+                model=model,
+                malformed_content=content,
+                provider_slot=provider_slot,
+            )
             try:
                 parsed = self._parse_json_response(repaired)
                 repair_meta["repair_used"] = True
@@ -100,6 +168,42 @@ class AIClient:
                 return parsed
             except ValueError as repair_error:
                 raise ValueError(str(repair_error)) from parse_error
+
+    async def call_text(
+        self,
+        model: str,
+        system_prompt: str,
+        user_input: str,
+        *,
+        stream: bool = False,
+        thinking: bool = False,
+        provider_slot: str = "default",
+        user_content: str | list[dict[str, Any]] | None = None,
+    ) -> tuple[str, dict[str, Any]]:
+        try:
+            return await self._request_text(
+                model=model,
+                system_prompt=system_prompt,
+                user_input=user_input,
+                thinking=thinking,
+                stream=stream,
+                provider_slot=provider_slot,
+                user_content=user_content,
+            )
+        except RuntimeError:
+            mock = self._mock_response(system_prompt=system_prompt, user_input=user_input)
+            return (
+                json.dumps(mock, ensure_ascii=False),
+                {
+                    "provider_used": "mock",
+                    "fallback_used": False,
+                    "primary_model": model,
+                    "fallback_model": self._fallback_model,
+                    "attempt_count": 0,
+                    "failure_reason": "no_provider_configured",
+                    "provider_slot": provider_slot,
+                },
+            )
 
     async def _request_text(
         self,
@@ -109,29 +213,38 @@ class AIClient:
         user_input: str,
         thinking: bool,
         stream: bool,
+        provider_slot: str,
+        user_content: str | list[dict[str, Any]] | None,
     ) -> tuple[str, dict[str, Any]]:
-        if self._marketplace_api_key:
+        provider_config = self._get_provider_config(provider_slot)
+        if provider_config.api_key:
             primary_attempts = 0
             last_error: Exception | None = None
-            for primary_attempts in range(1, self._retry_count + 2):
+            for primary_attempts in range(1, provider_config.retry_count + 2):
                 try:
+                    await self._wait_for_rate_limit_window()
                     text = await self._request_marketplace_text(
+                        provider_config=provider_config,
                         model=model,
                         system_prompt=system_prompt,
                         user_input=user_input,
                         stream=stream,
+                        user_content=user_content,
                     )
                     return text, {
-                        "provider_used": "chiasegpu",
+                        "provider_used": provider_config.provider_name,
                         "fallback_used": False,
                         "primary_model": model,
                         "fallback_model": self._fallback_model,
                         "attempt_count": primary_attempts,
                         "failure_reason": None,
+                        "provider_slot": provider_slot,
                     }
                 except ProviderExecutionError as exc:
                     last_error = exc
-                    if primary_attempts <= self._retry_count and self._should_retry(exc):
+                    if isinstance(exc, ProviderRateLimitError):
+                        await self._activate_rate_limit_hold(exc.retry_after_sec)
+                    if primary_attempts <= provider_config.retry_count and self._should_retry(exc):
                         continue
                     break
 
@@ -150,6 +263,7 @@ class AIClient:
                     "fallback_model": self._fallback_model,
                     "attempt_count": primary_attempts + 1,
                     "failure_reason": last_error.__class__.__name__,
+                    "provider_slot": provider_slot,
                 }
             if last_error is not None:
                 raise last_error
@@ -169,6 +283,7 @@ class AIClient:
                 "fallback_model": self._fallback_model,
                 "attempt_count": 1,
                 "failure_reason": None,
+                "provider_slot": provider_slot,
             }
 
         raise RuntimeError("No AI providers configured")
@@ -176,10 +291,12 @@ class AIClient:
     async def _request_marketplace_text(
         self,
         *,
+        provider_config: ProviderConfig,
         model: str,
         system_prompt: str,
         user_input: str,
         stream: bool,
+        user_content: str | list[dict[str, Any]] | None,
     ) -> str:
         if stream:
             raise ValueError("Streaming is not supported for marketplace requests")
@@ -187,11 +304,11 @@ class AIClient:
             "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_input},
+                {"role": "user", "content": user_content if user_content is not None else user_input},
             ],
             "stream": False,
         }
-        raw_response = await asyncio.to_thread(self._post_marketplace_completion, payload)
+        raw_response = await asyncio.to_thread(self._post_marketplace_completion, provider_config, payload)
         try:
             parsed = json.loads(raw_response)
         except json.JSONDecodeError as exc:
@@ -214,25 +331,37 @@ class AIClient:
                 return "\n".join(parts)
         raise ProviderEnvelopeError("Marketplace response did not include text content")
 
-    def _post_marketplace_completion(self, payload: dict[str, Any]) -> str:
+    def _post_marketplace_completion(self, provider_config: ProviderConfig, payload: dict[str, Any]) -> str:
         request = urllib_request.Request(
-            url=f"{self._marketplace_base_url}/chat/completions",
+            url=f"{provider_config.base_url}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
             headers={
-                "Authorization": f"Bearer {self._marketplace_api_key}",
+                "Authorization": f"Bearer {provider_config.api_key}",
                 "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "social-listening-v3/phase8",
             },
             method="POST",
         )
         try:
-            with urllib_request.urlopen(request, timeout=self._marketplace_timeout_sec) as response:
+            with urllib_request.urlopen(request, timeout=provider_config.timeout_sec) as response:
                 return response.read().decode("utf-8")
         except urllib_error.HTTPError as exc:
+            error_body = ""
+            try:
+                error_body = exc.read().decode("utf-8")
+            except Exception:
+                error_body = ""
             if exc.code == 429:
-                raise ProviderRateLimitError("Marketplace rate limited") from exc
+                raise ProviderRateLimitError(
+                    "Marketplace rate limited",
+                    retry_after_sec=self._parse_retry_after_seconds(exc.headers.get("Retry-After")),
+                ) from exc
             if exc.code >= 500:
                 raise ProviderServerError(f"Marketplace server error: {exc.code}") from exc
-            raise
+            if exc.code == 403 and error_body:
+                raise ProviderTransportError(f"Marketplace forbidden: {error_body[:200]}") from exc
+            raise ProviderTransportError(f"Marketplace request failed: HTTP {exc.code}") from exc
         except urllib_error.URLError as exc:
             if self._is_timeout_error(exc.reason):
                 raise ProviderTimeoutError("Marketplace request timed out") from exc
@@ -241,6 +370,34 @@ class AIClient:
             raise ProviderTimeoutError("Marketplace request timed out") from exc
         except TimeoutError as exc:
             raise ProviderTimeoutError("Marketplace request timed out") from exc
+
+    def _get_provider_config(self, provider_slot: str) -> ProviderConfig:
+        return self._provider_configs.get(provider_slot, self._provider_configs["default"])
+
+    async def _wait_for_rate_limit_window(self) -> None:
+        while True:
+            with self._rate_limit_lock:
+                remaining = self._rate_limit_until - time.monotonic()
+            if remaining <= 0:
+                return
+            await asyncio.sleep(min(remaining, 1.0))
+
+    async def _activate_rate_limit_hold(self, retry_after_sec: float | None) -> None:
+        cooldown = retry_after_sec if retry_after_sec and retry_after_sec > 0 else self._rate_limit_cooldown_sec
+        hold_until = time.monotonic() + cooldown
+        with self._rate_limit_lock:
+            self._rate_limit_until = max(self._rate_limit_until, hold_until)
+
+    def _parse_retry_after_seconds(self, value: str | None) -> float | None:
+        if not value:
+            return None
+        try:
+            seconds = float(value.strip())
+        except (TypeError, ValueError):
+            return None
+        if math.isfinite(seconds) and seconds > 0:
+            return seconds
+        return None
 
     def _is_timeout_error(self, error: object) -> bool:
         if isinstance(error, (TimeoutError, socket.timeout)):
@@ -281,7 +438,13 @@ class AIClient:
         text_blocks = [block.text for block in message.content if getattr(block, "type", "") == "text"]
         return "\n".join(text_blocks)
 
-    async def _repair_json_response(self, *, model: str, malformed_content: str) -> tuple[str, dict[str, Any]]:
+    async def _repair_json_response(
+        self,
+        *,
+        model: str,
+        malformed_content: str,
+        provider_slot: str,
+    ) -> tuple[str, dict[str, Any]]:
         repair_prompt = (
             "JSON_REPAIR\n"
             "You convert malformed JSON-like output into one strict JSON object.\n"
@@ -297,6 +460,8 @@ class AIClient:
             user_input=malformed_content,
             thinking=False,
             stream=False,
+            provider_slot=provider_slot,
+            user_content=None,
         )
 
     def _should_retry(self, exc: Exception) -> bool:

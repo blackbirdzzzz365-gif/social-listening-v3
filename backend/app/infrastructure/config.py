@@ -33,6 +33,15 @@ class Settings(BaseSettings):
     openai_compatible_api_key: str = ""
     openai_compatible_base_url: str = "https://llm.chiasegpu.vn/v1"
     openai_compatible_timeout_sec: float = 25.0
+    phase8_judge_api_key: str = ""
+    phase8_judge_api_base_url: str = "https://llm.chiasegpu.vn/v1"
+    phase8_judge_api_timeout_sec: float = 25.0
+    phase8_judge_api_retry_count: int | None = None
+    phase8_ocr_api_key: str = ""
+    phase8_ocr_api_base_url: str = "https://llm.chiasegpu.vn/v1"
+    phase8_ocr_api_timeout_sec: float = 40.0
+    phase8_ocr_api_retry_count: int | None = None
+    ai_rate_limit_cooldown_sec: float = 60.0
     anthropic_api_key: str = ""
     anthropic_fallback_model: str = "claude-haiku-4-5"
     ai_provider_retry_count: int = 1

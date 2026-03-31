@@ -16,6 +16,8 @@ from app.services.research_gating import (
 def build_test_settings() -> Settings:
     return Settings(
         openai_compatible_api_key="",
+        phase8_judge_api_key="",
+        phase8_ocr_api_key="",
         anthropic_api_key="",
         validity_spec_model="mock-validity-spec",
         content_judge_model="mock-judge",
