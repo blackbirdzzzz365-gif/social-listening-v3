@@ -46,10 +46,11 @@ class RunCancellationRequested(RuntimeError):
 
 
 class StepActionTimeout(RuntimeError):
-    def __init__(self, action_type: str, timeout_sec: float) -> None:
+    def __init__(self, action_type: str, timeout_sec: float, *, last_progress: dict[str, Any] | None = None) -> None:
         super().__init__(f"{action_type} exceeded {timeout_sec:.0f}s timeout")
         self.action_type = action_type
         self.timeout_sec = timeout_sec
+        self.last_progress = dict(last_progress or {})
 
 
 class RunnerService:
@@ -382,7 +383,17 @@ class RunnerService:
                             step_run.status = "FAILED"
                             step_run.error_message = str(exc)
                             step_run.ended_at = utc_now_iso()
+                            failed_checkpoint, actual_count = self._build_failed_step_checkpoint(
+                                step_run=step_run,
+                                exc=exc,
+                                failure_class=failure_class,
+                            )
+                            step_run.checkpoint = failed_checkpoint
+                            step_run.checkpoint_json = failed_checkpoint
+                            if actual_count is not None:
+                                step_run.actual_count = actual_count
                             session.add(step_run)
+                    run.total_records = self._count_run_records(session, run_id)
                     session.commit()
             if current_step_run_id:
                 await self._emit(
@@ -393,6 +404,8 @@ class RunnerService:
                         "error": str(exc),
                         "step_run_id": current_step_run_id,
                         "failure_class": failure_class,
+                        "salvage_available": isinstance(exc, StepActionTimeout)
+                        and bool((exc.last_progress or {}).get("collected_count") or (exc.last_progress or {}).get("sample_candidates")),
                     },
                 )
             await self._emit(
@@ -648,11 +661,13 @@ class RunnerService:
         timeout_sec = self._resolve_action_timeout_sec(step.action_type)
         heartbeat_interval = float(getattr(self._settings, "step_heartbeat_interval_sec", 10.0) or 10.0)
         started = time.monotonic()
+        latest_progress: dict[str, Any] = {"activity": activity, "elapsed_sec": 0.0}
 
         async def progress_callback(progress: dict[str, Any]) -> None:
             enriched = dict(progress)
             enriched.setdefault("activity", activity)
             enriched["elapsed_sec"] = round(time.monotonic() - started, 1)
+            latest_progress.update(enriched)
             await self._update_step_progress(run_id, step_run.step_run_id, step, enriched)
 
         task = asyncio.create_task(action(progress_callback))
@@ -678,6 +693,7 @@ class RunnerService:
                     await asyncio.gather(task, return_exceptions=True)
                     raise RunCancellationRequested(f"{step.action_type} cancelled")
                 elapsed = time.monotonic() - started
+                latest_progress.update({"activity": activity, "elapsed_sec": round(elapsed, 1)})
                 await self._update_step_progress(
                     run_id,
                     step_run.step_run_id,
@@ -687,7 +703,7 @@ class RunnerService:
                 if timeout_sec > 0 and elapsed >= timeout_sec:
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
-                    raise StepActionTimeout(step.action_type, timeout_sec)
+                    raise StepActionTimeout(step.action_type, timeout_sec, last_progress=latest_progress)
         finally:
             self._active_step_tasks.pop(step_run.step_run_id, None)
 
@@ -1207,6 +1223,40 @@ class RunnerService:
         if current_step_run_id:
             return "STEP_ERROR", "STEP_EXECUTION_ERROR"
         return "POST_RUN_ERROR", "POST_RUN_ERROR"
+
+    def _build_failed_step_checkpoint(
+        self,
+        *,
+        step_run: StepRun,
+        exc: Exception,
+        failure_class: str,
+    ) -> tuple[str, int | None]:
+        checkpoint = json.loads(step_run.checkpoint or step_run.checkpoint_json or "{}")
+        now = utc_now_iso()
+        checkpoint["phase"] = "failed"
+        checkpoint["failed_at"] = now
+        checkpoint["failure_class"] = failure_class
+        progress = dict(checkpoint.get("progress") or {})
+        if isinstance(exc, StepActionTimeout):
+            progress.update(exc.last_progress or {})
+            collected_count = int(progress.get("collected_count") or 0)
+            persisted_count = int(progress.get("persisted_count") or 0)
+            checkpoint["heartbeat_at"] = checkpoint.get("heartbeat_at") or step_run.started_at or now
+            checkpoint["progress"] = progress
+            checkpoint["salvage"] = {
+                "available": bool(collected_count or progress.get("sample_candidates")),
+                "timed_out_at": now,
+                "collected_count": collected_count,
+                "persisted_count": persisted_count,
+                "lost_before_persist_count": max(collected_count - persisted_count, 0),
+                "image_candidate_count": int(progress.get("image_candidate_count") or 0),
+                "sample_candidates": list(progress.get("sample_candidates") or [])[:3],
+                "activity": progress.get("activity"),
+                "elapsed_sec": progress.get("elapsed_sec"),
+            }
+            return json.dumps(checkpoint), (collected_count or None)
+        checkpoint["progress"] = progress
+        return json.dumps(checkpoint), None
 
     def _normalize_query_key(self, query: str) -> str:
         return re.sub(r"\s+", " ", (query or "").strip().lower())

@@ -475,6 +475,8 @@ class BrowserAgent:
                         "activity": "scanning_search_results",
                         "query": query,
                         "collected_count": len(posts),
+                        "sample_candidates": self._build_progress_samples(posts),
+                        "image_candidate_count": self._count_visual_candidates(posts),
                         "discovered_group_count": len(discovered_groups),
                         "idle_scrolls": idle_scrolls,
                     },
@@ -642,6 +644,7 @@ class BrowserAgent:
                     posted_at=None,
                     reaction_count=0,
                     comment_count=0,
+                    **(await self._extract_image_context_from_locator(article)),
                 )
             )
             comment_stack.append(
@@ -657,6 +660,8 @@ class BrowserAgent:
                     "activity": "extracting_comments",
                     "post_url": post_url,
                     "collected_count": len(comments),
+                    "sample_candidates": self._build_progress_samples(comments),
+                    "image_candidate_count": self._count_visual_candidates(comments),
                 },
             )
         return comments
@@ -725,6 +730,7 @@ class BrowserAgent:
                         posted_at=None,
                         reaction_count=0,
                         comment_count=0,
+                        **(await self._extract_image_context_from_locator(article)),
                     )
                 )
                 await self._emit_progress(
@@ -734,6 +740,8 @@ class BrowserAgent:
                         "group_id": group_id,
                         "query": query,
                         "collected_count": len(posts),
+                        "sample_candidates": self._build_progress_samples(posts),
+                        "image_candidate_count": self._count_visual_candidates(posts),
                         "idle_scrolls": idle_scrolls,
                     },
                 )
@@ -811,6 +819,7 @@ class BrowserAgent:
                         posted_at=None,
                         reaction_count=0,
                         comment_count=0,
+                        **(await self._extract_image_context_from_locator(handle)),
                     )
                 )
                 await self._emit_progress(
@@ -819,6 +828,8 @@ class BrowserAgent:
                         "activity": "scanning_feed_posts",
                         "group_id": group_id,
                         "collected_count": len(posts) + start_index,
+                        "sample_candidates": self._build_progress_samples(posts, offset=start_index),
+                        "image_candidate_count": self._count_visual_candidates(posts),
                         "idle_scrolls": idle_scrolls,
                     },
                 )
@@ -1274,9 +1285,67 @@ class BrowserAgent:
                 "posted_at": None,
                 "reaction_count": 0,
                 "comment_count": 0,
+                **(await self._extract_image_context_from_locator(article)),
             }
         except Exception:
             return None
+
+    async def _extract_image_context_from_locator(self, locator: Any) -> dict[str, Any]:
+        image_urls: list[str] = []
+        alt_texts: list[str] = []
+        try:
+            images = await locator.locator("img").all()
+        except Exception:
+            images = []
+
+        for image in images[:8]:
+            try:
+                src = (await image.get_attribute("src") or "").strip()
+            except Exception:
+                src = ""
+            if src.startswith("http") and ("fbcdn" in src or "scontent" in src or "cdn" in src):
+                image_urls.append(src)
+            try:
+                alt = (await image.get_attribute("alt") or "").strip()
+            except Exception:
+                alt = ""
+            if alt and len(alt) > 1:
+                alt_texts.append(re.sub(r"\s+", " ", alt))
+
+        image_urls = self._dedupe_text(image_urls)[:3]
+        alt_texts = self._dedupe_text(alt_texts)[:3]
+        if not image_urls and not alt_texts:
+            return {}
+        return {
+            "image_urls": image_urls,
+            "image_alt_text": " | ".join(alt_texts)[:500],
+            "image_summary": (f"{len(image_urls)} image(s) detected" if image_urls else "image alt text detected"),
+        }
+
+    def _build_progress_samples(self, posts: list[dict[str, Any]], *, offset: int = 0) -> list[dict[str, Any]]:
+        samples: list[dict[str, Any]] = []
+        base_ordinal = max(1, len(posts) - 2 + offset)
+        for ordinal, post in enumerate(posts[-3:], start=base_ordinal):
+            content = re.sub(r"\s+", " ", str(post.get("content") or "")).strip()
+            samples.append(
+                {
+                    "ordinal": ordinal,
+                    "post_id": str(post.get("post_id") or ""),
+                    "source_url": post.get("source_url"),
+                    "source_group_id": post.get("source_group_id"),
+                    "record_type": post.get("record_type", "POST"),
+                    "content_preview": content[:180],
+                    "has_image_context": bool(post.get("image_urls") or post.get("image_alt_text") or post.get("image_summary")),
+                }
+            )
+        return samples
+
+    def _count_visual_candidates(self, posts: list[dict[str, Any]]) -> int:
+        return sum(
+            1
+            for post in posts
+            if post.get("image_urls") or post.get("image_alt_text") or post.get("image_summary")
+        )
 
     def _post_id_from_url(self, url: str) -> str:
         match = re.search(r"/posts/(\d+)", url)

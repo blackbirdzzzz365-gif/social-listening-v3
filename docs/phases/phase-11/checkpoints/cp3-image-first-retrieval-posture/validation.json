@@ -1,0 +1,13 @@
+{
+  "cp": "cp3-image-first-retrieval-posture",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-04-01T14:25:00+0700",
+  "summary": "Image-bearing retrieval posture now has both query-level prioritization and browser-extracted visual context passing tests.",
+  "checks": [
+    "PYTHONPATH=backend /Users/nguyenquocthong/project/social-listening-v3/.venv/bin/pytest -q backend/tests/test_retrieval_quality.py backend/tests/test_planner_phase11.py"
+  ],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp4-timeout-salvage-auditability"
+}

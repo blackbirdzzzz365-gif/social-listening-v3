@@ -1,0 +1,14 @@
+{
+  "cp": "cp5-phase11-audit-tooling",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-04-01T14:25:00+0700",
+  "summary": "Updated production monitoring/report tooling to read planner metadata and timeout salvage truth, and validated the new Phase 11 case pack shape in dry-run mode.",
+  "artifacts": [
+    "scripts/monitor_production_run.py",
+    "scripts/run_production_case_pack.py",
+    "docs/production/case-packs/phase-11-core.json"
+  ],
+  "issues": [],
+  "notes": "Production audit can now surface planner/provider attempts and collected-but-unpersisted salvage details."
+}

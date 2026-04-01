@@ -17,6 +17,7 @@ from app.schemas.plans import (
     SessionCreateRequest,
     SessionResponse,
 )
+from app.services.planner import PlannerProviderUnavailableError
 
 router = APIRouter(prefix="/api", tags=["plans"])
 SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills"
@@ -30,9 +31,16 @@ def _load_skill(filename: str) -> str:
 
 
 async def _enrich_with_explanations(payload: dict, http_request: Request) -> dict:
-    explanations = await http_request.app.state.planner_service.explain_steps(
-        payload, _load_skill("step_explain.md")
-    )
+    try:
+        explanations = await http_request.app.state.planner_service.explain_steps(
+            payload, _load_skill("step_explain.md")
+        )
+    except PlannerProviderUnavailableError:
+        payload.setdefault("warnings", []).append(
+            "Step explanations are temporarily unavailable due to planner provider instability."
+        )
+        return payload
+
     for step in payload.get("steps", []):
         step["explain"] = explanations.get(step["step_id"], "")
     return payload
@@ -48,6 +56,7 @@ def _to_session_response(result) -> SessionResponse:
         retrieval_profile=result.retrieval_profile,
         validity_spec=result.validity_spec,
         clarification_history=result.clarification_history,
+        planning_meta=result.planning_meta,
     )
 
 
@@ -58,6 +67,8 @@ async def create_session(request: SessionCreateRequest, http_request: Request) -
             request.topic,
             _load_skill("keyword_analysis.md"),
         )
+    except PlannerProviderUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -73,6 +84,8 @@ async def get_session(context_id: str, http_request: Request) -> SessionResponse
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PlannerProviderUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return _to_session_response(result)
 
 
@@ -88,6 +101,8 @@ async def submit_clarifications(
             request.answers,
             _load_skill("keyword_analysis.md"),
         )
+    except PlannerProviderUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return _to_session_response(result)
@@ -118,6 +133,8 @@ async def create_plan(request: PlanCreateRequest, http_request: Request) -> Plan
             _load_skill("plan_generation.md"),
         )
         payload = await _enrich_with_explanations(payload, http_request)
+    except PlannerProviderUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return PlanResponse(**payload)
@@ -132,6 +149,8 @@ async def refine_plan(plan_id: str, request: PlanRefineRequest, http_request: Re
             _load_skill("plan_refinement.md"),
         )
         payload = await _enrich_with_explanations(payload, http_request)
+    except PlannerProviderUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return PlanResponse(**payload)

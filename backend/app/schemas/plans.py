@@ -37,6 +37,7 @@ class SessionResponse(BaseModel):
     retrieval_profile: dict[str, Any] | None = None
     validity_spec: dict[str, Any] | None = None
     clarification_history: list[ClarificationTurn] = Field(default_factory=list)
+    planning_meta: dict[str, Any] | None = None
 
 
 class KeywordUpdateRequest(BaseModel):
@@ -81,6 +82,7 @@ class PlanResponse(BaseModel):
     estimated_total_duration_sec: int
     warnings: list[str] = Field(default_factory=list)
     diff_summary: str | None = None
+    generation_meta: dict[str, Any] | None = None
 
 
 class ApprovalRequest(BaseModel):

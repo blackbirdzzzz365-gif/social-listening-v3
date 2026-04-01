@@ -22,6 +22,7 @@ class Plan(Base):
     )
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="draft")
+    generation_meta_json: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[str] = mapped_column(
         Text,
         nullable=False,

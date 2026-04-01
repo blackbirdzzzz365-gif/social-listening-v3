@@ -91,6 +91,10 @@ context_row = cur.fetchone()
 context_id = context_row["context_id"] if context_row else None
 out["context_id"] = context_id
 
+cur.execute("SELECT * FROM plans WHERE plan_id = ?", (plan_id,))
+plan_row = cur.fetchone()
+out["plan"] = dict(plan_row) if plan_row else None
+
 if context_id:
     cur.execute("SELECT * FROM product_contexts WHERE context_id = ?", (context_id,))
     row = cur.fetchone()
@@ -198,6 +202,8 @@ def summarize_run(snapshot: dict) -> dict:
         "reformulation_observed": False,
         "reason_cluster_observed": False,
         "image_fallback_observed": False,
+        "planner_meta_present": bool(context.get("planning_meta_json")) or bool((snapshot.get("plan") or {}).get("generation_meta_json")),
+        "timeout_salvage_observed": False,
     }
 
     accepted_total = 0
@@ -226,8 +232,10 @@ def summarize_run(snapshot: dict) -> dict:
     running_steps = []
     pending_steps = []
     failed_steps = []
+    timeout_salvage_steps = []
     for step in step_runs:
         checkpoint = safe_json_loads(step.get("checkpoint") or step.get("checkpoint_json"))
+        salvage = checkpoint.get("salvage") if isinstance(checkpoint, dict) else None
         summary = {
             "step_id": step["step_id"],
             "action_type": by_action.get(step["step_id"]),
@@ -239,6 +247,7 @@ def summarize_run(snapshot: dict) -> dict:
             "error_message": step.get("error_message"),
             "heartbeat_at": checkpoint.get("heartbeat_at") if isinstance(checkpoint, dict) else None,
             "progress": checkpoint.get("progress") if isinstance(checkpoint, dict) else None,
+            "salvage": salvage if isinstance(salvage, dict) else None,
         }
         if step["status"] == "DONE":
             completed_steps.append(summary)
@@ -248,6 +257,19 @@ def summarize_run(snapshot: dict) -> dict:
             pending_steps.append(summary)
         elif step["status"] == "FAILED":
             failed_steps.append(summary)
+            if isinstance(salvage, dict) and salvage.get("available"):
+                timeout_salvage_steps.append(
+                    {
+                        "step_id": step["step_id"],
+                        "action_type": by_action.get(step["step_id"]),
+                        "collected_count": salvage.get("collected_count"),
+                        "persisted_count": salvage.get("persisted_count"),
+                        "lost_before_persist_count": salvage.get("lost_before_persist_count"),
+                        "image_candidate_count": salvage.get("image_candidate_count"),
+                        "sample_candidates": salvage.get("sample_candidates") or [],
+                    }
+                )
+                phase_flags["timeout_salvage_observed"] = True
 
     for step in step_runs:
         if by_action.get(step["step_id"]) != "CRAWL_COMMENTS":
@@ -316,6 +338,8 @@ def summarize_run(snapshot: dict) -> dict:
     )
 
     concerns: list[str] = []
+    context_planning_meta = safe_json_loads(context.get("planning_meta_json")) if context else None
+    plan_generation_meta = safe_json_loads((snapshot.get("plan") or {}).get("generation_meta_json"))
     if accepted_total == 0:
         concerns.append("No ACCEPTED records so far; retrieval is spending budget mostly on REJECTED/UNCERTAIN candidates.")
     if uncertain_total > 0 and accepted_total == 0:
@@ -352,6 +376,10 @@ def summarize_run(snapshot: dict) -> dict:
         concerns.append(
             "No record triggered image understanding in this run, so the vision fallback path is still unproven for this production scenario."
         )
+    if not phase_flags["planner_meta_present"]:
+        concerns.append("Planner/provider attempt metadata is missing from production artifacts, so planner resilience is not yet auditable end to end.")
+    if run.get("failure_class") == "STEP_STUCK_TIMEOUT" and not phase_flags["timeout_salvage_observed"]:
+        concerns.append("The run hit STEP_STUCK_TIMEOUT without salvage metadata, so collected-but-unpersisted evidence is still opaque.")
     for step in completed_steps:
         if step.get("action_type") == "SEARCH_IN_GROUP" and step.get("accepted_count") == 0 and int(step.get("actual_count") or 0) > 0:
             concerns.append(
@@ -401,10 +429,13 @@ def summarize_run(snapshot: dict) -> dict:
         "accepted_with_image": accepted_with_image,
         "latest_label_job": latest_label_job,
         "phase_flags": phase_flags,
+        "planner_analysis_meta": context_planning_meta,
+        "plan_generation_meta": plan_generation_meta,
         "completed_steps": completed_steps,
         "running_steps": running_steps,
         "pending_steps": pending_steps,
         "failed_steps": failed_steps,
+        "timeout_salvage_steps": timeout_salvage_steps,
         "failure_mode": failure_mode,
         "batch_decisions": dict(decision_counter),
         "reason_clusters": dict(reason_clusters),
@@ -454,6 +485,8 @@ def render_report(snapshot: dict, analysis: dict, output_dir: Path) -> None:
             f"- FAILED `{item['step_id']}` `{item['action_type']}` from {item.get('started_at')} to {item.get('ended_at')} "
             f"with actual_count={item.get('actual_count')} error=`{item.get('error_message')}`"
         )
+        if item.get("salvage"):
+            lines.append(f"  salvage=`{json.dumps(item.get('salvage') or {}, ensure_ascii=False)}`")
     for item in analysis.get("pending_steps", []):
         lines.append(f"- PENDING `{item['step_id']}` `{item['action_type']}`")
 
@@ -469,6 +502,8 @@ def render_report(snapshot: dict, analysis: dict, output_dir: Path) -> None:
             f"- Reason-aware reformulation observed: `{flags.get('reformulation_observed')}`",
             f"- Reason clusters observed: `{flags.get('reason_cluster_observed')}`",
             f"- Image fallback observed: `{flags.get('image_fallback_observed')}`",
+            f"- Planner metadata present: `{flags.get('planner_meta_present')}`",
+            f"- Timeout salvage observed: `{flags.get('timeout_salvage_observed')}`",
             f"- Answer status present: `{flags.get('answer_status_present')}`",
             f"- ACCEPTED / UNCERTAIN / REJECTED: `{analysis.get('accepted_total')}` / `{analysis.get('uncertain_total')}` / `{analysis.get('rejected_total')}`",
             f"- Theme count: `{analysis.get('theme_count')}`",
@@ -495,6 +530,26 @@ def render_report(snapshot: dict, analysis: dict, output_dir: Path) -> None:
         lines.append("- The run found accepted evidence, but answer delivery is still incomplete because no themes were persisted.")
     if analysis.get("running_steps"):
         lines.append("- The run is still in progress, so this report is interim until final completion.")
+
+    planner_analysis_meta = analysis.get("planner_analysis_meta") or {}
+    plan_generation_meta = analysis.get("plan_generation_meta") or {}
+    if planner_analysis_meta or plan_generation_meta:
+        lines.extend(["", "## Planner Resilience"])
+        if planner_analysis_meta:
+            lines.append(f"- Context planning meta: `{json.dumps(planner_analysis_meta, ensure_ascii=False)}`")
+        if plan_generation_meta:
+            lines.append(f"- Plan generation meta: `{json.dumps(plan_generation_meta, ensure_ascii=False)}`")
+
+    if analysis.get("timeout_salvage_steps"):
+        lines.extend(["", "## Timeout Salvage"])
+        for salvage in analysis.get("timeout_salvage_steps", []):
+            lines.append(
+                f"- `{salvage['step_id']}` `{salvage['action_type']}` collected=`{salvage.get('collected_count')}` "
+                f"persisted=`{salvage.get('persisted_count')}` lost_before_persist=`{salvage.get('lost_before_persist_count')}` "
+                f"image_candidates=`{salvage.get('image_candidate_count')}`"
+            )
+            for sample in salvage.get("sample_candidates") or []:
+                lines.append(f"  sample=`{json.dumps(sample, ensure_ascii=False)}`")
 
     lines.extend(["", "## Efficiency Concerns"])
     for concern in analysis.get("concerns", []):
@@ -543,6 +598,8 @@ def update_status(snapshot: dict, analysis: dict, output_dir: Path) -> None:
         f"- Batch decisions: `{json.dumps(analysis.get('batch_decisions') or {}, ensure_ascii=False)}`",
         f"- Theme count: `{analysis.get('theme_count')}`",
         f"- Image fallback count: `{analysis.get('image_fallback_total')}`",
+        f"- Planner metadata present: `{(analysis.get('phase_flags') or {}).get('planner_meta_present')}`",
+        f"- Timeout salvage observed: `{(analysis.get('phase_flags') or {}).get('timeout_salvage_observed')}`",
         "",
         "## Running Steps",
     ]
@@ -552,6 +609,14 @@ def update_status(snapshot: dict, analysis: dict, output_dir: Path) -> None:
             lines.append(f"- `{step['step_id']}` `{step['action_type']}` since {step.get('started_at')}")
     else:
         lines.append("- None")
+    salvage_steps = analysis.get("timeout_salvage_steps") or []
+    if salvage_steps:
+        lines.extend(["", "## Timeout Salvage"])
+        for step in salvage_steps:
+            lines.append(
+                f"- `{step['step_id']}` `{step['action_type']}` collected=`{step.get('collected_count')}` "
+                f"persisted=`{step.get('persisted_count')}` lost_before_persist=`{step.get('lost_before_persist_count')}`"
+            )
     status_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

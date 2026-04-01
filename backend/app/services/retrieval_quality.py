@@ -38,6 +38,7 @@ COMPLAINT_PREFIXES = ("loi", "phi", "chan", "te", "bi khoa", "bi tru")
 TRUST_SIGNAL_TERMS = ("trust", "uy tin", "lua dao", "fraud", "scam", "bi lua")
 COST_SIGNAL_TERMS = ("phi", "fee", "lai", "interest", "chi phi", "gia cao")
 SYMPTOM_SIGNAL_TERMS = ("kich ung", "mun", "da nhay cam", "side effect", "tac dung phu", "pain")
+IMAGE_SIGNAL_TERMS = ("hinh anh", "co anh", "review co anh", "truoc va sau", "before after", "screenshot", "anh that", "video")
 PROMO_REASON_TERMS = ("promot", "seller", "commercial", "cta", "transactional")
 TARGET_REASON_TERMS = ("target", "mention", "brand", "entity")
 
@@ -155,6 +156,13 @@ class RetrievalProfileBuilder:
             query_families.append({"intent": "comparison", "query": term})
         for prefix in COMPLAINT_PREFIXES[:2]:
             query_families.append({"intent": "complaint", "query": f"{prefix} {base_query}".strip()})
+        if self._is_image_bearing_text(topic):
+            query_families.extend(
+                [
+                    {"intent": "image_review", "query": f"{base_query} review co hinh anh".strip()},
+                    {"intent": "before_after", "query": f"{base_query} truoc va sau".strip()},
+                ]
+            )
 
         source_hints = dedupe_keep_order(brand_terms[:3] + pain_terms[:2])
         return {
@@ -315,6 +323,8 @@ class RetrievalProfileBuilder:
     ) -> list[str]:
         normalized_query = normalize_text(query)
         validity_text = self._validity_signal_text(validity_spec)
+        if self._is_image_bearing_text(f"{query} {validity_text}"):
+            return ["image_review", "before_after", "pain_point", "question", "comparison", "complaint", "brand"]
         if normalized_query.endswith(" vs") or " vs " in normalized_query:
             return ["comparison", "pain_point", "question", "complaint"]
         if any(term in normalized_query for term in ("fake", "lua dao", "loi", "te")):
@@ -340,6 +350,14 @@ class RetrievalProfileBuilder:
         validity_text = self._validity_signal_text(validity_spec)
         base_query = self._base_query(query, profile)
         expansions: list[str] = []
+        if self._is_image_bearing_text(f"{query} {validity_text}"):
+            expansions.extend(
+                [
+                    f"{base_query} review co hinh anh".strip(),
+                    f"{base_query} truoc va sau".strip(),
+                    f"{base_query} screenshot".strip(),
+                ]
+            )
         if any(term in validity_text for term in TRUST_SIGNAL_TERMS):
             expansions.extend(
                 [
@@ -379,6 +397,10 @@ class RetrievalProfileBuilder:
         profile = profile or {}
         anchors = profile.get("anchors", [])
         return str(anchors[0] if anchors else query).strip()
+
+    def _is_image_bearing_text(self, value: str) -> bool:
+        normalized = normalize_text(value)
+        return any(term in normalized for term in IMAGE_SIGNAL_TERMS)
 
 
 class DeterministicRelevanceEngine:

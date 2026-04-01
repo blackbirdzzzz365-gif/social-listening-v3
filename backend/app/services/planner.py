@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import delete, select
 
 from app.domain.action_registry import get_action_spec
-from app.infra.ai_client import AIClient
+from app.infra.ai_client import AIClient, ProviderExecutionError
 from app.infrastructure.config import Settings
 from app.infrastructure.database import SessionLocal
 from app.models.approval import ApprovalGrant
@@ -44,6 +46,14 @@ class KeywordAnalysisResult:
     retrieval_profile: dict[str, object] | None
     validity_spec: dict[str, object] | None
     clarification_history: list[dict[str, str]]
+    planning_meta: dict[str, Any] | None = None
+
+
+class PlannerProviderUnavailableError(RuntimeError):
+    def __init__(self, stage: str, message: str, meta: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.meta = meta
 
 
 class PlannerService:
@@ -54,7 +64,8 @@ class PlannerService:
         self._validity_spec_builder = ValiditySpecBuilder(ai_client, settings)
 
     async def analyze_topic(self, topic: str, prompt: str) -> KeywordAnalysisResult:
-        response = await self._ai_client.call(
+        response, planning_meta = await self._call_planner_with_resilience(
+            stage="analysis",
             model=self._settings.keyword_analysis_model,
             system_prompt=prompt,
             user_input=self._build_keyword_analysis_payload(topic, []),
@@ -79,6 +90,7 @@ class PlannerService:
                 validity_spec_json=json.dumps(validity_spec) if validity_spec else None,
                 clarifying_question_json=json.dumps(clarifying_questions) if clarifying_questions else None,
                 clarification_history_json=json.dumps([]),
+                planning_meta_json=json.dumps({"analysis": planning_meta}, ensure_ascii=False),
             )
             session.add(context)
             session.commit()
@@ -91,6 +103,7 @@ class PlannerService:
             retrieval_profile=retrieval_profile,
             validity_spec=validity_spec,
             clarification_history=[],
+            planning_meta={"analysis": planning_meta},
         )
 
     async def get_context_result(self, context_id: str, prompt: str | None = None) -> KeywordAnalysisResult:
@@ -104,7 +117,8 @@ class PlannerService:
                 and prompt is not None
             ):
                 history = self._parse_history(context.clarification_history_json)
-                response = await self._ai_client.call(
+                response, planning_meta = await self._call_planner_with_resilience(
+                    stage="analysis_refresh",
                     model=self._settings.keyword_analysis_model,
                     system_prompt=prompt,
                     user_input=self._build_keyword_analysis_payload(context.topic, history),
@@ -125,6 +139,10 @@ class PlannerService:
                 context.retrieval_profile_json = json.dumps(retrieval_profile) if retrieval_profile else None
                 context.validity_spec_json = json.dumps(validity_spec) if validity_spec else None
                 context.status = response["status"]
+                context.planning_meta_json = json.dumps(
+                    self._merge_planning_meta(context.planning_meta_json, "analysis_refresh", planning_meta),
+                    ensure_ascii=False,
+                )
                 session.add(context)
                 session.commit()
                 session.refresh(context)
@@ -159,7 +177,8 @@ class PlannerService:
         ]
         merged_history = history + new_turns
 
-        response = await self._ai_client.call(
+        response, planning_meta = await self._call_planner_with_resilience(
+            stage="clarification",
             model=self._settings.keyword_analysis_model,
             system_prompt=prompt,
             user_input=self._build_keyword_analysis_payload(topic, merged_history),
@@ -184,6 +203,10 @@ class PlannerService:
             context.validity_spec_json = json.dumps(validity_spec) if validity_spec else None
             context.clarifying_question_json = json.dumps(clarifying_questions) if clarifying_questions else None
             context.clarification_history_json = json.dumps(merged_history)
+            context.planning_meta_json = json.dumps(
+                self._merge_planning_meta(context.planning_meta_json, "clarification", planning_meta),
+                ensure_ascii=False,
+            )
             session.add(context)
             session.commit()
             session.refresh(context)
@@ -224,7 +247,8 @@ class PlannerService:
             retrieval_profile = json.loads(context.retrieval_profile_json or "{}")
             validity_spec = json.loads(context.validity_spec_json or "{}")
 
-        ai_response = await self._ai_client.call(
+        ai_response, generation_meta = await self._call_planner_with_resilience(
+            stage="plan_generation",
             model=self._settings.plan_generation_model,
             system_prompt=prompt,
             user_input=json.dumps(
@@ -245,7 +269,13 @@ class PlannerService:
         )
         plan_id = f"plan-{uuid4().hex[:8]}"
         with SessionLocal() as session:
-            plan = Plan(plan_id=plan_id, context_id=context_id, version=1, status="ready")
+            plan = Plan(
+                plan_id=plan_id,
+                context_id=context_id,
+                version=1,
+                status="ready",
+                generation_meta_json=json.dumps(generation_meta, ensure_ascii=False),
+            )
             session.add(plan)
             for step in normalized_steps:
                 session.add(
@@ -269,7 +299,8 @@ class PlannerService:
 
     async def refine_plan(self, plan_id: str, instruction: str, prompt: str) -> dict:
         plan = await self.get_plan(plan_id)
-        ai_response = await self._ai_client.call(
+        ai_response, generation_meta = await self._call_planner_with_resilience(
+            stage="plan_refinement",
             model=self._settings.plan_refinement_model,
             system_prompt=prompt,
             user_input=json.dumps(
@@ -289,6 +320,7 @@ class PlannerService:
                 raise ValueError("plan not found")
             db_plan.version = new_version
             db_plan.status = "ready"
+            db_plan.generation_meta_json = json.dumps(generation_meta, ensure_ascii=False)
             session.execute(
                 delete(PlanStep).where(
                     PlanStep.plan_id == plan_id,
@@ -624,6 +656,7 @@ class PlannerService:
         retrieval_profile: dict[str, object] | None,
         validity_spec: dict[str, object] | None,
         clarification_history: list[dict[str, str]],
+        planning_meta: dict[str, Any] | None = None,
     ) -> KeywordAnalysisResult:
         return KeywordAnalysisResult(
             context_id=context_id,
@@ -634,6 +667,7 @@ class PlannerService:
             retrieval_profile=retrieval_profile,
             validity_spec=validity_spec,
             clarification_history=clarification_history,
+            planning_meta=planning_meta,
         )
 
     def _result_from_context(self, context: ProductContext) -> KeywordAnalysisResult:
@@ -642,6 +676,7 @@ class PlannerService:
         validity_spec = json.loads(context.validity_spec_json) if context.validity_spec_json else None
         clarifying_questions = self._parse_json_list(context.clarifying_question_json) or None
         clarification_history = self._parse_history(context.clarification_history_json)
+        planning_meta = self._parse_json_object(context.planning_meta_json)
         return self._build_keyword_result(
             context_id=context.context_id,
             topic=context.topic,
@@ -651,6 +686,7 @@ class PlannerService:
             retrieval_profile=retrieval_profile,
             validity_spec=validity_spec,
             clarification_history=clarification_history,
+            planning_meta=planning_meta,
         )
 
     def _build_retrieval_profile(
@@ -699,7 +735,8 @@ class PlannerService:
             }
             for s in plan.get("steps", [])
         ]
-        response = await self._ai_client.call(
+        response, _ = await self._call_planner_with_resilience(
+            stage="step_explanation",
             model=self._settings.keyword_analysis_model,
             system_prompt=prompt,
             user_input=json.dumps({"topic": topic, "steps": steps_for_ai}, ensure_ascii=False),
@@ -739,6 +776,144 @@ class PlannerService:
                     for step in steps
                 ],
                 "estimated_total_duration_sec": sum(step.estimated_duration_sec or 0 for step in steps),
+                "generation_meta": self._parse_json_object(plan.generation_meta_json),
                 "warnings": [],
                 "updated_at": getattr(plan, "created_at", None),
             }
+
+    async def _call_planner_with_resilience(
+        self,
+        *,
+        stage: str,
+        model: str,
+        system_prompt: str,
+        user_input: str,
+        thinking: bool = False,
+        provider_slot: str = "default",
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        max_attempts = max(1, int(self._settings.planner_retry_count) + 1)
+        backoff_sec = max(0.0, float(self._settings.planner_retry_backoff_sec))
+        attempt_history: list[dict[str, Any]] = []
+
+        for attempt in range(1, max_attempts + 1):
+            started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+            try:
+                response = await self._ai_client.call(
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_input=user_input,
+                    thinking=thinking,
+                    provider_slot=provider_slot,
+                )
+                provider_meta = dict(response.get("_provider_meta") or {})
+                attempt_history.append(
+                    {
+                        "attempt": attempt,
+                        "started_at": started_at,
+                        "status": "success",
+                        "provider_used": provider_meta.get("provider_used"),
+                        "fallback_used": bool(provider_meta.get("fallback_used", False)),
+                        "failure_reason": provider_meta.get("failure_reason"),
+                    }
+                )
+                planning_meta = {
+                    "stage": stage,
+                    "status": "success",
+                    "attempt_count": attempt,
+                    "provider_slot": provider_slot,
+                    "provider_used": provider_meta.get("provider_used"),
+                    "fallback_used": bool(provider_meta.get("fallback_used", False)),
+                    "primary_model": provider_meta.get("primary_model", model),
+                    "fallback_model": provider_meta.get("fallback_model"),
+                    "failure_reason": provider_meta.get("failure_reason"),
+                    "attempts": attempt_history,
+                }
+                return response, planning_meta
+            except Exception as exc:
+                classification = self._classify_planner_exception(exc)
+                attempt_history.append(
+                    {
+                        "attempt": attempt,
+                        "started_at": started_at,
+                        "status": "error",
+                        "retryable": classification["retryable"],
+                        "provider_failure": classification["provider_failure"],
+                        "error_type": exc.__class__.__name__,
+                        "error_message": str(exc)[:240],
+                    }
+                )
+                if classification["retryable"] and attempt < max_attempts:
+                    if backoff_sec > 0:
+                        await asyncio.sleep(backoff_sec * attempt)
+                    continue
+                if classification["provider_failure"]:
+                    meta = {
+                        "stage": stage,
+                        "status": "provider_unavailable",
+                        "attempt_count": attempt,
+                        "provider_slot": provider_slot,
+                        "provider_used": None,
+                        "fallback_used": False,
+                        "primary_model": model,
+                        "fallback_model": getattr(self._settings, "anthropic_fallback_model", None),
+                        "failure_reason": exc.__class__.__name__,
+                        "attempts": attempt_history,
+                    }
+                    raise PlannerProviderUnavailableError(
+                        stage,
+                        f"planner stage '{stage}' is temporarily unavailable: {exc}",
+                        meta,
+                    ) from exc
+                raise
+
+        raise RuntimeError("planner resilience loop terminated unexpectedly")
+
+    def _classify_planner_exception(self, exc: Exception) -> dict[str, bool]:
+        if isinstance(exc, ProviderExecutionError):
+            return {"provider_failure": True, "retryable": True}
+
+        lowered_name = exc.__class__.__name__.lower()
+        lowered_message = str(exc).lower()
+        retryable_markers = (
+            "overloaded",
+            "timeout",
+            "timed out",
+            "temporarily unavailable",
+            "rate limit",
+            "rate-limited",
+            "too many requests",
+            "connection error",
+            "transport",
+            "service unavailable",
+            " 529",
+        )
+        providerish_names = (
+            "internalservererror",
+            "apiconnectionerror",
+            "apitimeouterror",
+            "ratelimiterror",
+            "servicenotavailableerror",
+        )
+        provider_failure = lowered_name in providerish_names or any(marker in lowered_message for marker in retryable_markers)
+        retryable = provider_failure
+        return {"provider_failure": provider_failure, "retryable": retryable}
+
+    def _merge_planning_meta(
+        self,
+        existing_value: str | None,
+        stage: str,
+        planning_meta: dict[str, Any],
+    ) -> dict[str, Any]:
+        payload = self._parse_json_object(existing_value) or {}
+        payload[stage] = planning_meta
+        payload["latest_stage"] = stage
+        return payload
+
+    def _parse_json_object(self, value: str | None) -> dict[str, Any] | None:
+        if not value:
+            return None
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None

@@ -1,0 +1,30 @@
+{
+  "pack_id": "phase-11-core",
+  "description": "Default production case pack for Phase 11. Run only 1-2 live cases at a time.",
+  "defaults": {
+    "base_url": "https://social-listening-v3.blackbirdzzzz.art",
+    "ssh_target": "chiasegpu-vm",
+    "container": "social-listening-v3",
+    "report_root": "reports/production",
+    "interval_sec": 120,
+    "approval_mode": "read-only"
+  },
+  "cases": [
+    {
+      "id": "phase11-planner-resilience-fe-credit",
+      "mode": "live_api_flow",
+      "topic": "Suy nghi cua khach hang ve vay nhanh tien mat qua FE Credit",
+      "phase": "phase-11",
+      "focus": "planner resilience during clarification and plan generation",
+      "expectation": "Case nay dung de xac nhan planner khong vo generic validation failure khi provider gap overload tam thoi."
+    },
+    {
+      "id": "phase11-image-bearing-ngu-hoa",
+      "mode": "live_api_flow",
+      "topic": "Review co hinh anh ve mat na Ngu Hoa truoc va sau khi dung",
+      "phase": "phase-11",
+      "focus": "image-bearing evidence acquisition and timeout salvage",
+      "expectation": "Case nay dung de xac nhan image-bearing retrieval co posture rieng va timeout de lai audit truth thay vi 0-evidence mo ho."
+    }
+  ]
+}

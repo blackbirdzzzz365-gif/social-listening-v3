@@ -1,0 +1,10 @@
+{
+  "cp": "cp6-phase11-production-revalidation",
+  "role": "validator",
+  "status": "PARTIAL",
+  "timestamp": "2026-04-01T10:30:00+0700",
+  "summary": "Validation placeholder before live proof.",
+  "checks": [],
+  "issues": [],
+  "ready_for_next_cp": false
+}

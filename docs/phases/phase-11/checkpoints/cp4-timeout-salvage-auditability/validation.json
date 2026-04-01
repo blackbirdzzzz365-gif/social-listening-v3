@@ -1,0 +1,13 @@
+{
+  "cp": "cp4-timeout-salvage-auditability",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-04-01T14:25:00+0700",
+  "summary": "Timeout salvage metadata is preserved on failed steps and covered by dedicated unit tests.",
+  "checks": [
+    "PYTHONPATH=backend /Users/nguyenquocthong/project/social-listening-v3/.venv/bin/pytest -q backend/tests/test_runner_phase11_timeout.py"
+  ],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp5-phase11-audit-tooling"
+}

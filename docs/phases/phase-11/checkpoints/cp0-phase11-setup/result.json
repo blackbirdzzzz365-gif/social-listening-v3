@@ -1,0 +1,14 @@
+{
+  "cp": "cp0-phase11-setup",
+  "role": "implementer",
+  "status": "READY",
+  "timestamp": "2026-04-01T10:30:00+0700",
+  "summary": "Phase 11 docs package, manifest, case pack, and checkpoint workspace are scaffolded.",
+  "artifacts": [
+    "docs/phases/phase-11",
+    ".phase.json",
+    "docs/production/case-packs/phase-11-core.json"
+  ],
+  "issues": [],
+  "notes": "Scope is locked from the Phase 10 production verdict and improvement packet."
+}

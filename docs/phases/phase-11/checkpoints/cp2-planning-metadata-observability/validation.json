@@ -1,0 +1,14 @@
+{
+  "cp": "cp2-planning-metadata-observability",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-04-01T11:10:00+0700",
+  "summary": "Planning metadata persists and survives migration; session and plan payloads expose it without breaking existing tests.",
+  "checks": [
+    "cd backend && DATABASE_URL=sqlite:////tmp/social-listening-v3-phase11-test.db PYTHONPATH=. /Users/nguyenquocthong/project/social-listening-v3/.venv/bin/alembic upgrade head",
+    "PYTHONPATH=backend /Users/nguyenquocthong/project/social-listening-v3/.venv/bin/pytest -q backend/tests"
+  ],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp3-image-first-retrieval-posture"
+}

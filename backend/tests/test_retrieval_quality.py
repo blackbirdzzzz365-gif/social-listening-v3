@@ -106,6 +106,36 @@ class RetrievalProfileBuilderTests(unittest.TestCase):
         self.assertEqual(cluster, "promo_noise")
         self.assertTrue(any("review" in query.lower() or "bi lua" in query.lower() for query in reformulations))
 
+    def test_adds_image_bearing_queries_for_visual_topics(self) -> None:
+        builder = RetrievalProfileBuilder()
+        profile = builder.build(
+            topic="Review co hinh anh ve mat na Ngu Hoa truoc va sau khi dung",
+            keyword_map={
+                "brand": ["mat na Ngu Hoa"],
+                "pain_points": ["kich ung"],
+                "comparison": [],
+                "behavior": [],
+                "sentiment": [],
+            },
+        )
+
+        intents = [item["intent"] for item in profile["query_families"]]
+        self.assertIn("image_review", intents)
+        self.assertIn("before_after", intents)
+
+        queries = builder.suggest_queries(
+            "mat na Ngu Hoa",
+            profile,
+            validity_spec={
+                "research_objective": "Tim review co hinh anh va bang chung truoc va sau cua mat na Ngu Hoa.",
+                "target_signal_types": ["visual_review_signal"],
+                "must_have_signals": ["hinh anh that", "truoc va sau"],
+            },
+            max_variants=3,
+        )
+
+        self.assertIn("mat na Ngu Hoa review co hinh anh", queries)
+
 
 class RetrievalScoringTests(unittest.TestCase):
     def setUp(self) -> None:

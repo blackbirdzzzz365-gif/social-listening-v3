@@ -1,0 +1,14 @@
+{
+  "cp": "cp4-timeout-salvage-auditability",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-04-01T14:25:00+0700",
+  "summary": "Implemented timeout salvage metadata so stuck browser search steps preserve collected-vs-persisted truth, image candidate counts, and sample evidence in the failed checkpoint.",
+  "artifacts": [
+    "backend/app/services/runner.py",
+    "backend/app/infra/browser_agent.py",
+    "backend/tests/test_runner_phase11_timeout.py"
+  ],
+  "issues": [],
+  "notes": "Timeout checkpoints now carry salvage payloads instead of collapsing to opaque zero-record failures."
+}

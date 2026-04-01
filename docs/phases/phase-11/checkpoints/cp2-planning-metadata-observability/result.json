@@ -1,0 +1,16 @@
+{
+  "cp": "cp2-planning-metadata-observability",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-04-01T11:10:00+0700",
+  "summary": "Persisted planning metadata on product contexts and plans, added migration, and exposed planning/generation metadata through session and plan APIs.",
+  "artifacts": [
+    "backend/app/models/product_context.py",
+    "backend/app/models/plan.py",
+    "backend/alembic/versions/015_add_phase11_planning_metadata.py",
+    "backend/app/schemas/plans.py",
+    "backend/tests/test_planner_phase11.py"
+  ],
+  "issues": [],
+  "notes": "Context responses now carry stage-level planner metadata and plan responses now carry generation metadata."
+}

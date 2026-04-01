@@ -1,0 +1,14 @@
+{
+  "cp": "cp1-provider-resilient-planning",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-04-01T11:10:00+0700",
+  "summary": "Planner resilience wrapper works, retry path is covered by tests, and planner/provider failure maps to HTTP 503.",
+  "checks": [
+    "python3 -m compileall backend/app backend/tests",
+    "PYTHONPATH=backend /Users/nguyenquocthong/project/social-listening-v3/.venv/bin/pytest -q backend/tests/test_planner_phase11.py backend/tests/test_ai_client.py"
+  ],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp2-planning-metadata-observability"
+}

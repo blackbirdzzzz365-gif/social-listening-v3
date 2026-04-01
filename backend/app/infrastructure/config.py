@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_fallback_model: str = "claude-haiku-4-5"
     ai_provider_retry_count: int = 1
+    planner_retry_count: int = 2
+    planner_retry_backoff_sec: float = 1.0
     keyword_analysis_model: str = "gpt-4o"
     keyword_analysis_thinking: bool = False
     plan_generation_model: str = "gpt-4o"

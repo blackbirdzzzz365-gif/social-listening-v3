@@ -1,0 +1,14 @@
+{
+  "cp": "cp3-image-first-retrieval-posture",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-04-01T14:25:00+0700",
+  "summary": "Implemented image-bearing query families, prioritization hooks, and browser-side image context extraction so image-led posts can reach judging with visual metadata.",
+  "artifacts": [
+    "backend/app/services/retrieval_quality.py",
+    "backend/app/infra/browser_agent.py",
+    "backend/tests/test_retrieval_quality.py"
+  ],
+  "issues": [],
+  "notes": "Image-bearing topics now generate dedicated query posture and raw post payloads include image metadata for the phase 8/11 judge path."
+}

@@ -20,6 +20,7 @@ class ProductContext(Base):
     validity_spec_json: Mapped[Optional[str]] = mapped_column(Text)
     clarifying_question_json: Mapped[Optional[str]] = mapped_column(Text)
     clarification_history_json: Mapped[Optional[str]] = mapped_column(Text)
+    planning_meta_json: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
         nullable=False,

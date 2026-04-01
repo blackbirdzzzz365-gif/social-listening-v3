@@ -1,0 +1,15 @@
+{
+  "cp": "cp0-phase11-setup",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-04-01T10:30:00+0700",
+  "summary": "Phase 11 workspace scaffolding exists and `.phase.json` points to the new phase.",
+  "checks": [
+    "docs package exists",
+    "phase metadata updated",
+    "default case pack created"
+  ],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp1-provider-resilient-planning"
+}

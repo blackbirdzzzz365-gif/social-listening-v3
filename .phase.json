@@ -3,7 +3,7 @@
     "name": "social-listening-v3",
     "default_worktree_root": "../social-listening-v3-worktrees"
   },
-  "current": "phase-10",
+  "current": "phase-11",
   "phases": {
     "phase-1": {
       "name": "Production Foundation",
@@ -47,16 +47,24 @@
     },
     "phase-10": {
       "name": "Execution Control And Production Observability",
-      "status": "active",
+      "status": "completed",
       "branch": "codex/phase-10",
       "docs_root": "docs/phases/phase-10",
       "report_root": "reports/production",
       "summary": "Phase 10 hardens stop semantics, step heartbeat, timeout taxonomy, audit tooling, and production revalidation for answer closeout and image-bearing cases."
+    },
+    "phase-11": {
+      "name": "Provider-Resilient Planning And Image-Bearing Evidence Acquisition",
+      "status": "active",
+      "branch": "codex/phase-11",
+      "docs_root": "docs/phases/phase-11",
+      "report_root": "reports/production",
+      "summary": "Phase 11 hardens planner provider resilience, planning observability, image-first retrieval posture, and timeout salvage for image-bearing production cases."
     }
   },
   "production_loop": {
     "operating_model": "docs/codex-product-loop.md",
-    "default_case_pack": "docs/production/case-packs/phase-10-core.json",
+    "default_case_pack": "docs/production/case-packs/phase-11-core.json",
     "report_root": "reports/production",
     "checkpoint_verdict_template": "docs/templates/checkpoint-verdict-template.md",
     "phase_manifest_template": "docs/templates/phase-manifest-template.md",
