@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     browser_screen_width: int = 1600
     browser_screen_height: int = 900
     static_dir: str = "static"
+    platform_auth_enabled: bool = True
+    platform_auth_session_url: str = "https://blackbirdzzzz.art/v1/auth/session"
+    platform_auth_login_url: str = "https://blackbirdzzzz.art/login"
+    platform_auth_cookie_name: str = "__Secure-bb_session"
+    platform_auth_cookie_fallback_name: str = "bb_session"
+    platform_auth_timeout_sec: float = 5.0
     openai_compatible_api_key: str = ""
     openai_compatible_base_url: str = "https://llm.chiasegpu.vn/v1"
     openai_compatible_timeout_sec: float = 25.0
