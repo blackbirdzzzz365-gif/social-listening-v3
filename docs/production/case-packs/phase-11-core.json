@@ -15,8 +15,12 @@
       "mode": "live_api_flow",
       "topic": "Suy nghi cua khach hang ve vay nhanh tien mat qua FE Credit",
       "phase": "phase-11",
-      "focus": "planner resilience during clarification and plan generation",
-      "expectation": "Case nay dung de xac nhan planner khong vo generic validation failure khi provider gap overload tam thoi."
+      "focus": "FE Credit vay nhanh tien mat",
+      "audience": "Tap trung vao feedback that ve trust, complaint, phi, lai suat, va trai nghiem vay tien mat qua FE Credit tai Viet Nam.",
+      "comparison_policy": "Ghi nhan so sanh voi Home Credit, Shinhan Finance, hoac don vi cho vay khac neu giup ly giai trust, phi, hoac trai nghiem vay, nhung uu tien feedback that ve FE Credit.",
+      "timeframe": "Tap trung 12 thang gan nhat.",
+      "default_answer": "Tap trung vao feedback that ve trust, complaint, phi, lai suat, va trai nghiem vay tien mat qua FE Credit tai Viet Nam.",
+      "expectation": "Case nay dung de xac nhan planner khong vo generic validation failure khi provider gap overload tam thoi, trong khi van giu dung bai toan user-facing ve FE Credit."
     },
     {
       "id": "phase11-image-bearing-ngu-hoa",
@@ -24,6 +28,11 @@
       "topic": "Review co hinh anh ve mat na Ngu Hoa truoc va sau khi dung",
       "phase": "phase-11",
       "focus": "image-bearing evidence acquisition and timeout salvage",
+      "audience": "Tap trung vao bai review that co hinh anh, screenshot, hoac bang chung truc quan lien quan den mat na Ngu Hoa tai Viet Nam.",
+      "comparison_policy": "Ghi nhan so sanh voi mat na thien nhien hoac thuong hieu khac neu bai co bang chung truc quan, nhung uu tien bai review that ve Ngu Hoa.",
+      "timeframe": "Tap trung 12 thang gan nhat.",
+      "default_answer": "Tap trung vao bai review that co hinh anh, screenshot, hoac bang chung truc quan lien quan den mat na Ngu Hoa tai Viet Nam.",
+      "vision_policy": "Uu tien bai co hinh anh that, before-after, screenshot, hoac bang chung truc quan; neu khong co thi can ket luan ro no visual evidence.",
       "expectation": "Case nay dung de xac nhan image-bearing retrieval co posture rieng va timeout de lai audit truth thay vi 0-evidence mo ho."
     }
   ]

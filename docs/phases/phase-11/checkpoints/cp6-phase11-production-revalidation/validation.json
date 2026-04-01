@@ -1,10 +1,29 @@
 {
   "cp": "cp6-phase11-production-revalidation",
   "role": "validator",
-  "status": "PARTIAL",
-  "timestamp": "2026-04-01T10:30:00+0700",
-  "summary": "Validation placeholder before live proof.",
-  "checks": [],
-  "issues": [],
-  "ready_for_next_cp": false
+  "status": "PASS",
+  "timestamp": "2026-04-01T22:41:00+07:00",
+  "summary": "Live production proof completed for both Phase 11 cases; checkpoint objective is satisfied even though the image-bearing user problem remains open.",
+  "checks": [
+    {
+      "id": "CHECK-01",
+      "status": "PASS",
+      "detail": "Live run artifacts exist for FE Credit and Ngu Hoa cases, plus a phase verdict and improvement packet."
+    },
+    {
+      "id": "CHECK-02",
+      "status": "PASS",
+      "detail": "Planner resilience metadata is present in production for both cases and FE Credit reached ANSWER_READY."
+    },
+    {
+      "id": "CHECK-03",
+      "status": "PASS",
+      "detail": "Image-bearing case failed with STEP_STUCK_TIMEOUT but emitted timeout salvage with collected_count=54, persisted_count=0, and image_candidate_count=53."
+    }
+  ],
+  "issues": [
+    "Phase 11 passes as a delivery checkpoint, but it does not fully solve image-bearing evidence acquisition in production.",
+    "No production record in Phase 11 triggered image understanding or produced persisted visual-evidence candidates."
+  ],
+  "ready_for_next_cp": true
 }

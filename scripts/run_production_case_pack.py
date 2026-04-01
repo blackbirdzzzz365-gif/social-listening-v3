@@ -20,7 +20,11 @@ def request(method: str, url: str, payload: dict | None = None) -> dict:
     req = urllib.request.Request(
         url,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "social-listening-v3-phase11-case-pack/1.0",
+        },
         method=method,
     )
     with urllib.request.urlopen(req, timeout=120) as response:
