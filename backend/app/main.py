@@ -47,7 +47,18 @@ def _is_auth_exempt(path: str) -> bool:
 
 
 def _build_login_url(request: FastAPIRequest) -> str:
-    return_to = str(request.url)
+    forwarded_proto = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    forwarded_host = (
+        request.headers.get("x-forwarded-host")
+        or request.headers.get("host")
+        or ""
+    ).split(",")[0].strip()
+    if forwarded_proto and forwarded_host:
+        return_to = f"{forwarded_proto}://{forwarded_host}{request.url.path}"
+        if request.url.query:
+            return_to = f"{return_to}?{request.url.query}"
+    else:
+        return_to = str(request.url)
     query = urlencode({"returnTo": return_to})
     return f"{settings.platform_auth_login_url}?{query}"
 
