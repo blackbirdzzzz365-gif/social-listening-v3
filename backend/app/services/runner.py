@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.domain.action_registry import get_action_spec
 from app.infra.ai_client import AIClient
@@ -40,6 +41,17 @@ class RunControl:
         self.resume_event.set()
 
 
+class RunCancellationRequested(RuntimeError):
+    pass
+
+
+class StepActionTimeout(RuntimeError):
+    def __init__(self, action_type: str, timeout_sec: float) -> None:
+        super().__init__(f"{action_type} exceeded {timeout_sec:.0f}s timeout")
+        self.action_type = action_type
+        self.timeout_sec = timeout_sec
+
+
 class RunnerService:
     def __init__(
         self,
@@ -64,6 +76,7 @@ class RunnerService:
         self._relevance_engine = DeterministicRelevanceEngine()
         self._model_judge = ModelJudgeService(ai_client, settings)
         self._batch_evaluator = Phase8BatchHealthEvaluator(settings)
+        self._active_step_tasks: dict[str, asyncio.Task[Any]] = {}
 
     async def start_run(self, plan_id: str, grant_id: str) -> dict[str, Any]:
         run_id = f"run-{uuid4().hex[:10]}"
@@ -145,7 +158,7 @@ class RunnerService:
             run = session.get(PlanRun, run_id)
             if run is None:
                 raise ValueError("run not found")
-            if run.status not in {"DONE", "FAILED", "CANCELLED"}:
+            if run.status not in {"DONE", "FAILED", "CANCELLED", "CANCELLING"}:
                 run.status = "PAUSED"
                 run.completion_reason = None
                 session.add(run)
@@ -164,7 +177,7 @@ class RunnerService:
             run = session.get(PlanRun, run_id)
             if run is None:
                 raise ValueError("run not found")
-            if run.status not in {"DONE", "FAILED", "CANCELLED"}:
+            if run.status not in {"DONE", "FAILED", "CANCELLED", "CANCELLING"}:
                 snapshot = await self._browser_admission.snapshot()
                 run.status = "RUNNING" if snapshot.owner_run_id == run_id else "QUEUED"
                 run.completion_reason = None
@@ -180,19 +193,33 @@ class RunnerService:
             raise ValueError("run not found")
         control.stop_requested = True
         control.resume_event.set()
+        running_step_run_ids: list[str] = []
         with SessionLocal() as session:
             run = session.get(PlanRun, run_id)
             if run is None:
                 raise ValueError("run not found")
             if run.status not in {"DONE", "FAILED", "CANCELLED"}:
-                run.status = "CANCELLED"
-                run.completion_reason = "USER_CANCELLED"
-                run.ended_at = utc_now_iso()
+                run.status = "CANCELLING"
+                run.completion_reason = None
+                run.ended_at = None
                 session.add(run)
+                running_step_run_ids = [
+                    step_run_id
+                    for step_run_id in session.scalars(
+                        select(StepRun.step_run_id).where(
+                            StepRun.run_id == run_id,
+                            StepRun.status == "RUNNING",
+                        )
+                    ).all()
+                ]
                 session.commit()
+        for step_run_id in running_step_run_ids:
+            task = self._active_step_tasks.get(step_run_id)
+            if task is not None and not task.done():
+                task.cancel()
         await self._browser_admission.cancel(run_id)
         await self._browser_admission.notify()
-        await self._emit(run_id, "run_cancelled", {"run_id": run_id})
+        await self._emit(run_id, "run_cancelling", {"run_id": run_id, "status": "CANCELLING"})
         return self.get_run(run_id)
 
     def get_run(self, run_id: str) -> dict[str, Any]:
@@ -218,6 +245,8 @@ class RunnerService:
                         "step_id": get_public_step_id(step_run.step_id),
                         "action_type": step.action_type if step else "UNKNOWN",
                         "status": step_run.status,
+                        "started_at": step_run.started_at,
+                        "ended_at": step_run.ended_at,
                         "read_or_write": step.read_or_write if step else "READ",
                         "target": step.target if step else "",
                         "actual_count": step_run.actual_count,
@@ -263,10 +292,13 @@ class RunnerService:
             if self._run_requires_browser.get(run_id, True):
                 browser_slot_acquired = await self._await_browser_slot(run_id, control)
                 if not browser_slot_acquired:
+                    if control.stop_requested:
+                        await self._finalize_cancelled_run(run_id, current_step_run_id)
                     return
             while True:
                 await control.resume_event.wait()
                 if control.stop_requested:
+                    await self._finalize_cancelled_run(run_id, current_step_run_id)
                     return
 
                 step_data = self._load_next_step(run_id)
@@ -281,6 +313,7 @@ class RunnerService:
                 current_step_run_id = None
 
                 if control.stop_requested:
+                    await self._finalize_cancelled_run(run_id, current_step_run_id)
                     return
                 if control.pause_requested:
                     await control.resume_event.wait()
@@ -331,6 +364,8 @@ class RunnerService:
                     "answer_status": None if closeout_summary is None else closeout_summary.get("answer_status"),
                 },
             )
+        except RunCancellationRequested:
+            await self._finalize_cancelled_run(run_id, current_step_run_id)
         except Exception as exc:
             completion_reason, failure_class = self._classify_failure(exc, current_step_run_id)
             with SessionLocal() as session:
@@ -379,7 +414,7 @@ class RunnerService:
     def _load_next_step(self, run_id: str) -> tuple[StepRun, PlanStep] | None:
         with SessionLocal() as session:
             run = session.get(PlanRun, run_id)
-            if run is None or run.status == "CANCELLED":
+            if run is None or run.status in {"CANCELLED", "CANCELLING"}:
                 return None
             step_runs = session.scalars(select(StepRun).where(StepRun.run_id == run_id)).all()
             pending = []
@@ -411,6 +446,11 @@ class RunnerService:
                     "phase": "running",
                     "step_id": get_public_step_id(step.step_id),
                     "started_at": db_step_run.started_at,
+                    "heartbeat_at": db_step_run.started_at,
+                    "progress": {
+                        "activity": "step_started",
+                        "action_type": step.action_type,
+                    },
                 }
             )
             db_step_run.checkpoint = checkpoint
@@ -439,7 +479,7 @@ class RunnerService:
                 )
                 with SessionLocal() as session:
                     run = session.get(PlanRun, run_id)
-                    if run is None or run.status == "CANCELLED":
+                    if run is None or run.status in {"CANCELLED", "CANCELLING"}:
                         await self._browser_admission.release(run_id)
                         return False
                     run.status = "RUNNING"
@@ -466,7 +506,7 @@ class RunnerService:
             step_run.actual_count = result.get("actual_count")
             step_run.checkpoint = checkpoint
             step_run.checkpoint_json = checkpoint
-            run.total_records = (run.total_records or 0) + int(result.get("records_added", 0))
+            run.total_records = self._count_run_records(session, run_id)
             session.add(step_run)
             session.add(run)
             session.commit()
@@ -480,6 +520,177 @@ class RunnerService:
             },
         )
 
+    def _count_run_records(self, session: Any, run_id: str) -> int:
+        return int(
+            session.scalar(
+                select(func.count()).select_from(CrawledPost).where(CrawledPost.run_id == run_id)
+            )
+            or 0
+        )
+
+    def _resolve_action_timeout_sec(self, action_type: str) -> float:
+        lookup = {
+            "SEARCH_POSTS": "search_posts_timeout_sec",
+            "SEARCH_IN_GROUP": "search_in_group_timeout_sec",
+            "CRAWL_FEED": "crawl_feed_timeout_sec",
+            "CRAWL_COMMENTS": "crawl_comments_timeout_sec",
+            "SEARCH_GROUPS": "search_groups_timeout_sec",
+            "JOIN_GROUP": "group_membership_timeout_sec",
+            "CHECK_JOIN_STATUS": "group_membership_timeout_sec",
+        }
+        key = lookup.get(action_type)
+        value = getattr(self._settings, key, None) if key else None
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    async def _update_step_progress(
+        self,
+        run_id: str,
+        step_run_id: str,
+        step: PlanStep,
+        progress: dict[str, Any],
+    ) -> None:
+        heartbeat_at = utc_now_iso()
+        payload: dict[str, Any] | None = None
+        with SessionLocal() as session:
+            db_step_run = session.get(StepRun, step_run_id)
+            run = session.get(PlanRun, run_id)
+            if db_step_run is None or run is None or db_step_run.status != "RUNNING":
+                return
+            checkpoint = json.loads(db_step_run.checkpoint or db_step_run.checkpoint_json or "{}")
+            checkpoint["phase"] = "running"
+            checkpoint["step_id"] = get_public_step_id(step.step_id)
+            checkpoint["started_at"] = db_step_run.started_at
+            checkpoint["heartbeat_at"] = heartbeat_at
+            merged_progress = dict(checkpoint.get("progress") or {})
+            merged_progress.update(progress)
+            checkpoint["progress"] = merged_progress
+            serialized = json.dumps(checkpoint)
+            db_step_run.checkpoint = serialized
+            db_step_run.checkpoint_json = serialized
+            run.total_records = self._count_run_records(session, run_id)
+            session.add(db_step_run)
+            session.add(run)
+            session.commit()
+            payload = {
+                "run_id": run_id,
+                "step_run_id": step_run_id,
+                "step_id": get_public_step_id(step.step_id),
+                "action_type": step.action_type,
+                "heartbeat_at": heartbeat_at,
+                "progress": merged_progress,
+                "total_records": run.total_records,
+            }
+        if payload is not None:
+            await self._emit(run_id, "step_progress", payload)
+
+    async def _finalize_cancelled_run(self, run_id: str, current_step_run_id: str | None) -> None:
+        with SessionLocal() as session:
+            run = session.get(PlanRun, run_id)
+            if run is None or run.status == "CANCELLED":
+                return
+            now = utc_now_iso()
+            run.status = "CANCELLED"
+            run.completion_reason = "USER_CANCELLED"
+            run.failure_class = None
+            run.ended_at = now
+            run.total_records = self._count_run_records(session, run_id)
+            step_runs = session.scalars(select(StepRun).where(StepRun.run_id == run_id)).all()
+            for step_run in step_runs:
+                if step_run.status == "RUNNING":
+                    checkpoint = json.loads(step_run.checkpoint or step_run.checkpoint_json or "{}")
+                    checkpoint["phase"] = "cancelled"
+                    checkpoint["cancelled_at"] = now
+                    checkpoint["step_id"] = get_public_step_id(step_run.step_id)
+                    step_run.status = "SKIPPED"
+                    step_run.error_message = "run cancelled by operator"
+                    step_run.ended_at = now
+                    serialized = json.dumps(checkpoint)
+                    step_run.checkpoint = serialized
+                    step_run.checkpoint_json = serialized
+                    session.add(step_run)
+                elif step_run.status == "PENDING":
+                    checkpoint = json.loads(step_run.checkpoint or step_run.checkpoint_json or "{}")
+                    checkpoint["phase"] = "cancelled"
+                    checkpoint["cancelled_at"] = now
+                    checkpoint["step_id"] = get_public_step_id(step_run.step_id)
+                    step_run.status = "SKIPPED"
+                    step_run.error_message = "skipped after run cancellation"
+                    serialized = json.dumps(checkpoint)
+                    step_run.checkpoint = serialized
+                    step_run.checkpoint_json = serialized
+                    session.add(step_run)
+            session.add(run)
+            session.commit()
+        await self._emit(
+            run_id,
+            "run_cancelled",
+            {
+                "run_id": run_id,
+                "status": "CANCELLED",
+                "completion_reason": "USER_CANCELLED",
+                "step_run_id": current_step_run_id,
+            },
+        )
+
+    async def _run_browser_action(
+        self,
+        run_id: str,
+        step_run: StepRun,
+        step: PlanStep,
+        action: Callable[[Callable[[dict[str, Any]], Awaitable[None]]], Awaitable[Any]],
+        *,
+        activity: str,
+    ) -> Any:
+        control = self._controls[run_id]
+        timeout_sec = self._resolve_action_timeout_sec(step.action_type)
+        heartbeat_interval = float(getattr(self._settings, "step_heartbeat_interval_sec", 10.0) or 10.0)
+        started = time.monotonic()
+
+        async def progress_callback(progress: dict[str, Any]) -> None:
+            enriched = dict(progress)
+            enriched.setdefault("activity", activity)
+            enriched["elapsed_sec"] = round(time.monotonic() - started, 1)
+            await self._update_step_progress(run_id, step_run.step_run_id, step, enriched)
+
+        task = asyncio.create_task(action(progress_callback))
+        self._active_step_tasks[step_run.step_run_id] = task
+        try:
+            await self._update_step_progress(
+                run_id,
+                step_run.step_run_id,
+                step,
+                {"activity": activity, "elapsed_sec": 0.0},
+            )
+            while True:
+                done, _pending = await asyncio.wait({task}, timeout=heartbeat_interval)
+                if done:
+                    try:
+                        return task.result()
+                    except asyncio.CancelledError as exc:
+                        if control.stop_requested:
+                            raise RunCancellationRequested(f"{step.action_type} cancelled") from exc
+                        raise
+                if control.stop_requested:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    raise RunCancellationRequested(f"{step.action_type} cancelled")
+                elapsed = time.monotonic() - started
+                await self._update_step_progress(
+                    run_id,
+                    step_run.step_run_id,
+                    step,
+                    {"activity": activity, "elapsed_sec": round(elapsed, 1)},
+                )
+                if timeout_sec > 0 and elapsed >= timeout_sec:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    raise StepActionTimeout(step.action_type, timeout_sec)
+        finally:
+            self._active_step_tasks.pop(step_run.step_run_id, None)
+
     async def _execute_step(self, run_id: str, step_run: StepRun, step: PlanStep) -> dict[str, Any]:
         action_spec = get_action_spec(step.action_type)
         if action_spec is None:
@@ -490,9 +701,26 @@ class RunnerService:
 
         public_step_id = get_public_step_id(step.step_id)
         checkpoint = json.loads(step_run.checkpoint or step_run.checkpoint_json or "{}")
+        control = self._controls[run_id]
+
+        async def report_progress(progress: dict[str, Any]) -> None:
+            await self._update_step_progress(run_id, step_run.step_run_id, step, progress)
+
+        def should_stop() -> bool:
+            return control.stop_requested
 
         if step.action_type == "SEARCH_GROUPS":
-            result = await self._browser_agent.search_groups(step.target, target_count=step.estimated_count or 3)
+            result = await self._run_browser_action(
+                run_id,
+                step_run,
+                step,
+                lambda progress_callback: self._browser_agent.search_groups(
+                    step.target,
+                    target_count=step.estimated_count or 3,
+                    progress_callback=progress_callback,
+                ),
+                activity="search_groups",
+            )
             return {
                 "actual_count": len(result["groups"]),
                 "records_added": 0,
@@ -531,10 +759,17 @@ class RunnerService:
             for group_id in group_ids:
                 if remaining <= 0:
                     break
-                posts = await self._browser_agent.crawl_feed(
-                    group_id=group_id,
-                    target_count=remaining,
-                    checkpoint=checkpoint,
+                posts = await self._run_browser_action(
+                    run_id,
+                    step_run,
+                    step,
+                    lambda progress_callback, gid=group_id, target=remaining: self._browser_agent.crawl_feed(
+                        group_id=gid,
+                        target_count=target,
+                        checkpoint=checkpoint,
+                        progress_callback=progress_callback,
+                    ),
+                    activity="crawl_feed",
                 )
                 for post in posts:
                     post["source_group_id"] = group_id
@@ -547,6 +782,8 @@ class RunnerService:
                     records=posts,
                     source_type=step.action_type,
                     query_text=step.target,
+                    progress_callback=report_progress,
+                    should_stop=should_stop,
                 )
                 persisted_count = processed["persisted_count"]
                 duplicate_count = processed["duplicate_count"]
@@ -574,7 +811,18 @@ class RunnerService:
             group_ids = self._resolve_private_group_ids(run_id, step)
             join_results = []
             for group_id in group_ids[: step.estimated_count or len(group_ids)]:
-                join_results.append(await self._browser_agent.join_group(group_id))
+                join_results.append(
+                    await self._run_browser_action(
+                        run_id,
+                        step_run,
+                        step,
+                        lambda progress_callback, gid=group_id: self._browser_agent.join_group(
+                            gid,
+                            progress_callback=progress_callback,
+                        ),
+                        activity="join_group",
+                    )
+                )
             requested_group_ids = [
                 item["group_id"]
                 for item in join_results
@@ -599,7 +847,16 @@ class RunnerService:
             blocked_group_ids: list[str] = []
             unanswered_group_ids: list[str] = []
             for group_id in group_ids[: step.estimated_count or len(group_ids)]:
-                status = await self._browser_agent.check_join_status(group_id)
+                status = await self._run_browser_action(
+                    run_id,
+                    step_run,
+                    step,
+                    lambda progress_callback, gid=group_id: self._browser_agent.check_join_status(
+                        gid,
+                        progress_callback=progress_callback,
+                    ),
+                    activity="check_join_status",
+                )
                 status_results.append(status)
                 if status.get("can_access"):
                     approved_group_ids.append(group_id)
@@ -643,7 +900,17 @@ class RunnerService:
                 query_index += 1
                 if remaining <= 0:
                     break
-                result = await self._browser_agent.search_posts(query, target_count=remaining)
+                result = await self._run_browser_action(
+                    run_id,
+                    step_run,
+                    step,
+                    lambda progress_callback, q=query, target=remaining: self._browser_agent.search_posts(
+                        q,
+                        target_count=target,
+                        progress_callback=progress_callback,
+                    ),
+                    activity="search_posts",
+                )
                 posts_as_raw: list[RawPost] = []
                 for p in result["posts"]:
                     posts_as_raw.append(
@@ -671,6 +938,8 @@ class RunnerService:
                     records=posts_as_raw,
                     source_type=step.action_type,
                     query_text=query,
+                    progress_callback=report_progress,
+                    should_stop=should_stop,
                 )
                 persisted_count += processed["persisted_count"]
                 duplicate_count += processed["duplicate_count"]
@@ -735,11 +1004,18 @@ class RunnerService:
             all_batch_summaries: list[dict[str, Any]] = []
             per_post_limit = max(1, (step.estimated_count or 20) // max(len(post_refs), 1))
             for post_ref in post_refs:
-                comments = await self._browser_agent.crawl_comments(
-                    post_ref["post_url"],
-                    target_count=per_post_limit,
-                    parent_post_id=post_ref.get("post_id"),
-                    source_group_id=post_ref.get("source_group_id"),
+                comments = await self._run_browser_action(
+                    run_id,
+                    step_run,
+                    step,
+                    lambda progress_callback, ref=post_ref, limit=per_post_limit: self._browser_agent.crawl_comments(
+                        ref["post_url"],
+                        target_count=limit,
+                        parent_post_id=ref.get("post_id"),
+                        source_group_id=ref.get("source_group_id"),
+                        progress_callback=progress_callback,
+                    ),
+                    activity="crawl_comments",
                 )
                 all_comments.extend(comments)
                 processed = await self._process_candidates(
@@ -748,6 +1024,8 @@ class RunnerService:
                     records=comments,
                     source_type=step.action_type,
                     query_text=post_ref.get("query_text") or step.target,
+                    progress_callback=report_progress,
+                    should_stop=should_stop,
                 )
                 persisted = processed["persisted_count"]
                 dupes = processed["duplicate_count"]
@@ -795,8 +1073,17 @@ class RunnerService:
                 for group_id in group_ids:
                     if remaining <= 0:
                         break
-                    posts = await self._browser_agent.search_in_group(
-                        group_id, query, target_count=remaining
+                    posts = await self._run_browser_action(
+                        run_id,
+                        step_run,
+                        step,
+                        lambda progress_callback, gid=group_id, q=query, target=remaining: self._browser_agent.search_in_group(
+                            gid,
+                            q,
+                            target_count=target,
+                            progress_callback=progress_callback,
+                        ),
+                        activity="search_in_group",
                     )
                     for post in posts:
                         post["source_group_id"] = group_id
@@ -807,6 +1094,8 @@ class RunnerService:
                         records=posts,
                         source_type=step.action_type,
                         query_text=query,
+                        progress_callback=report_progress,
+                        should_stop=should_stop,
                     )
                     persisted = processed["persisted_count"]
                     dupes = processed["duplicate_count"]
@@ -913,6 +1202,8 @@ class RunnerService:
     def _classify_failure(self, exc: Exception, current_step_run_id: str | None) -> tuple[str, str]:
         if isinstance(exc, BrowserStartupError):
             return "INFRA_BROWSER_BOOT_FAILURE", "INFRA_BROWSER_BOOT_FAILURE"
+        if isinstance(exc, StepActionTimeout):
+            return "STEP_STUCK_TIMEOUT", "STEP_STUCK_TIMEOUT"
         if current_step_run_id:
             return "STEP_ERROR", "STEP_EXECUTION_ERROR"
         return "POST_RUN_ERROR", "POST_RUN_ERROR"
@@ -1123,6 +1414,8 @@ class RunnerService:
         records: list[dict[str, Any]],
         source_type: str,
         query_text: str,
+        progress_callback: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         if not records:
             return {
@@ -1155,10 +1448,26 @@ class RunnerService:
         reformulated_queries: list[str] = []
 
         for batch_index, start in enumerate(range(0, len(records), batch_size), start=1):
+            if callable(should_stop) and should_stop():
+                raise RunCancellationRequested("run cancelled before candidate scoring")
             raw_batch = records[start : start + batch_size]
             query_family = self._retrieval_profile_builder.infer_query_family(query_text, profile)
+            if progress_callback is not None:
+                await progress_callback(
+                    {
+                        "activity": "scoring_batch",
+                        "query_text": query_text,
+                        "query_family": query_family,
+                        "batch_index": batch_index,
+                        "batch_size": len(raw_batch),
+                        "scanned_count": total_scanned,
+                        "accepted_count": total_accepted,
+                    }
+                )
             scored_entries: list[dict[str, Any]] = []
             for raw in raw_batch:
+                if callable(should_stop) and should_stop():
+                    raise RunCancellationRequested("run cancelled during candidate scoring")
                 raw["query_text"] = query_text
                 record_type = str(raw.get("record_type") or "POST")
                 parent_entry = parent_context.get(raw.get("parent_post_id") or "") or parent_context.get(raw.get("parent_post_url") or "")
@@ -1288,6 +1597,8 @@ class RunnerService:
                     max_variants=max(1, int(getattr(self._settings, "retrieval_max_query_variants", 2) or 2)),
                 )
 
+            if callable(should_stop) and should_stop():
+                raise RunCancellationRequested("run cancelled before candidate persistence")
             persisted_count, duplicate_count, persisted_refs = self._persist_scored_posts(
                 run_id=run_id,
                 step_run_id=step_run_id,
@@ -1313,6 +1624,20 @@ class RunnerService:
                 "stop_reason": stop_reason if batch_decision == "stop" else None,
             }
             batch_summaries.append(summary)
+            if progress_callback is not None:
+                await progress_callback(
+                    {
+                        "activity": "persisted_batch",
+                        "query_text": query_text,
+                        "query_family": query_family,
+                        "batch_index": batch_index,
+                        "batch_decision": batch_decision,
+                        "persisted_count": persisted_total,
+                        "accepted_count": total_accepted,
+                        "scanned_count": total_scanned,
+                        "reason_cluster": reason_cluster,
+                    }
+                )
             if batch_decision in {"stop", "reformulate"}:
                 break
 

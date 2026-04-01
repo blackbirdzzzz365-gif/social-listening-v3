@@ -1,0 +1,15 @@
+{
+  "cp": "cp3-yield-aware-plan-routing",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-03-31T22:11:38+0700",
+  "summary": "Yield-aware routing gate passed in local validation. Query suggestion now honors validity_spec posture and tests cover finance trust/cost prioritization.",
+  "checks": [
+    "backend/tests/test_retrieval_quality.py covers trust/fraud/cost-oriented query suggestions.",
+    "Runner SEARCH_POSTS and SEARCH_IN_GROUP paths read suggested queries via RetrievalProfileBuilder.",
+    "Full backend test suite passes with routing changes enabled."
+  ],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp4-reason-aware-reformulation"
+}

@@ -1,0 +1,15 @@
+{
+  "cp": "cp4-reason-aware-reformulation",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-03-31T22:11:38+0700",
+  "summary": "Reason-aware reformulation gate passed in local validation. Reject reason clustering and reformulated queries are persisted into run checkpoint payloads and covered by tests.",
+  "checks": [
+    "backend/tests/test_retrieval_quality.py covers reject-reason clustering and reformulation output.",
+    "Runner query_attempts now store reason_cluster and reformulated_queries for production analysis.",
+    "CP6 monitoring script was upgraded to surface reformulation evidence from step checkpoints."
+  ],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp5-vision-validation-harness"
+}

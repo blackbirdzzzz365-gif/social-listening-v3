@@ -1,0 +1,30 @@
+{
+  "pack_id": "phase-9-core",
+  "description": "Legacy production case pack kept for historical Phase 9 replays.",
+  "defaults": {
+    "base_url": "https://social-listening-v3.blackbirdzzzz.art",
+    "ssh_target": "chiasegpu-vm",
+    "container": "social-listening-v3",
+    "report_root": "reports/production",
+    "interval_sec": 120,
+    "approval_mode": "read-only"
+  },
+  "cases": [
+    {
+      "id": "tpbank-evo-general-feedback",
+      "mode": "live_api_flow",
+      "topic": "Phan hoi khach hang ve TPBank EVO",
+      "phase": "phase-9",
+      "focus": "TPBank EVO",
+      "expectation": "Legacy Phase 9 replay case for answer delivery and routing comparison."
+    },
+    {
+      "id": "ngu-hoa-image-bearing-validation",
+      "mode": "live_api_flow",
+      "topic": "Review co hinh anh ve mat na Ngu Hoa truoc va sau khi dung",
+      "phase": "phase-9",
+      "focus": "feedback co hinh anh ve Ngu Hoa",
+      "expectation": "Legacy Phase 9 replay case for image-bearing validation comparison."
+    }
+  ]
+}

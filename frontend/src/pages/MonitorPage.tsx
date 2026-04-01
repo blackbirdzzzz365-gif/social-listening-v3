@@ -21,7 +21,13 @@ type StepRun = {
   step_id: string;
   action_type: string;
   status: string;
+  started_at?: string | null;
+  ended_at?: string | null;
   actual_count: number | null;
+  checkpoint?: {
+    heartbeat_at?: string;
+    progress?: Record<string, unknown>;
+  } | null;
 };
 
 type RunResponse = {
@@ -143,8 +149,10 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
     const knownEvents = [
       "run_started",
       "run_queued",
+      "run_cancelling",
       "run_admitted",
       "step_started",
+      "step_progress",
       "step_done",
       "step_failed",
       "run_paused",
@@ -301,7 +309,17 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
                     {step.step_id} · {step.action_type}
                   </Text>
                   <StatusBadge label={`Step ${step.status}`} status={step.status} />
+                  {step.started_at ? <KeyValueRow label="started" value={step.started_at} /> : null}
+                  {step.ended_at ? <KeyValueRow label="ended" value={step.ended_at} /> : null}
                   <KeyValueRow label="actual count" value={step.actual_count ?? 0} />
+                  {step.checkpoint?.heartbeat_at ? (
+                    <KeyValueRow label="heartbeat" value={step.checkpoint.heartbeat_at} />
+                  ) : null}
+                  {step.checkpoint?.progress ? (
+                    <Code block className="sl-code-block">
+                      {JSON.stringify(step.checkpoint.progress, null, 2)}
+                    </Code>
+                  ) : null}
                 </Stack>
               </Paper>
             ))}

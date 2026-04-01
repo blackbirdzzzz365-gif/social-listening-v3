@@ -1,0 +1,15 @@
+{
+  "cp": "cp4-reason-aware-reformulation",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-03-31T22:11:38+0700",
+  "summary": "Implemented reason-aware reformulation so weak paths can emit reject reason clusters and rewritten queries instead of only continue/stop decisions.",
+  "artifacts": [
+    "backend/app/services/retrieval_quality.py",
+    "backend/app/services/runner.py",
+    "backend/tests/test_retrieval_quality.py",
+    "scripts/monitor_production_run.py"
+  ],
+  "issues": [],
+  "notes": "Production smoke tooling now inspects reason_cluster and reformulated_queries so this checkpoint can be audited from real runs."
+}

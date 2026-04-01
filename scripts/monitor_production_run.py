@@ -18,6 +18,19 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def parse_ts(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
+
+
 def run_local(cmd: list[str], *, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         cmd,
@@ -120,11 +133,17 @@ summary_queries = {{
         "GROUP BY decision, used_image_understanding ORDER BY decision, used_image_understanding"
     ),
     "label_jobs": (
-        "SELECT label_job_id, status, records_total, records_labeled, records_failed, records_fallback, created_at, completed_at "
+        "SELECT label_job_id, status, records_total, records_labeled, records_failed, records_fallback, created_at, ended_at "
         "FROM label_jobs WHERE run_id = ? ORDER BY created_at DESC"
     ),
     "theme_results": (
         "SELECT COUNT(*) AS theme_count FROM theme_results WHERE run_id = ?"
+    ),
+    "record_timing": (
+        "SELECT MIN(crawled_at) AS first_record_at, "
+        "MIN(CASE WHEN COALESCE(judge_decision, pre_ai_status) = 'ACCEPTED' THEN crawled_at END) AS first_accepted_at, "
+        "MAX(crawled_at) AS last_record_at "
+        "FROM crawled_posts WHERE run_id = ?"
     ),
     "top_records": (
         "SELECT post_id, record_type, pre_ai_status, pre_ai_score, judge_decision, judge_confidence_score, "
@@ -208,6 +227,7 @@ def summarize_run(snapshot: dict) -> dict:
     pending_steps = []
     failed_steps = []
     for step in step_runs:
+        checkpoint = safe_json_loads(step.get("checkpoint") or step.get("checkpoint_json"))
         summary = {
             "step_id": step["step_id"],
             "action_type": by_action.get(step["step_id"]),
@@ -217,6 +237,8 @@ def summarize_run(snapshot: dict) -> dict:
             "actual_count": step.get("actual_count"),
             "accepted_count": accepted_by_step_run.get(step["step_run_id"], 0),
             "error_message": step.get("error_message"),
+            "heartbeat_at": checkpoint.get("heartbeat_at") if isinstance(checkpoint, dict) else None,
+            "progress": checkpoint.get("progress") if isinstance(checkpoint, dict) else None,
         }
         if step["status"] == "DONE":
             completed_steps.append(summary)
@@ -278,6 +300,20 @@ def summarize_run(snapshot: dict) -> dict:
     latest_label_job = label_jobs[0] if label_jobs else None
     theme_summary = summaries.get("theme_results") or []
     theme_count = int((theme_summary[0] or {}).get("theme_count") or 0) if theme_summary else 0
+    record_timing = (summaries.get("record_timing") or [{}])[0] or {}
+    run_started_at = parse_ts(run.get("started_at"))
+    first_record_at = parse_ts(record_timing.get("first_record_at"))
+    first_accepted_at = parse_ts(record_timing.get("first_accepted_at"))
+    time_to_first_record_sec = (
+        round((first_record_at - run_started_at).total_seconds(), 1)
+        if run_started_at and first_record_at
+        else None
+    )
+    time_to_first_accepted_sec = (
+        round((first_accepted_at - run_started_at).total_seconds(), 1)
+        if run_started_at and first_accepted_at
+        else None
+    )
 
     concerns: list[str] = []
     if accepted_total == 0:
@@ -298,6 +334,8 @@ def summarize_run(snapshot: dict) -> dict:
             )
     if run.get("failure_class"):
         concerns.append(f"Run failure class is `{run.get('failure_class')}`, which indicates an infra/runtime category rather than a generic step failure.")
+    if run.get("status") == "CANCELLING":
+        concerns.append("Run is still in CANCELLING state, so the stop request has not converged to a true terminal halt yet.")
     if accepted_total > 0 and run.get("answer_status") not in {"ANSWER_READY", "NO_ANSWER_CONTENT"}:
         concerns.append(
             "Accepted records exist but answer closeout did not finish in a final answer state yet."
@@ -353,6 +391,8 @@ def summarize_run(snapshot: dict) -> dict:
         "failure_class": run.get("failure_class"),
         "answer_status": run.get("answer_status"),
         "total_records": run.get("total_records"),
+        "time_to_first_record_sec": time_to_first_record_sec,
+        "time_to_first_accepted_sec": time_to_first_accepted_sec,
         "accepted_total": accepted_total,
         "uncertain_total": uncertain_total,
         "rejected_total": rejected_total,
@@ -393,6 +433,8 @@ def render_report(snapshot: dict, analysis: dict, output_dir: Path) -> None:
         f"- Started at: {run.get('started_at')}",
         f"- Ended at: {run.get('ended_at')}",
         f"- Total records persisted: {analysis.get('total_records')}",
+        f"- Time to first record (sec): {analysis.get('time_to_first_record_sec')}",
+        f"- Time to first accepted (sec): {analysis.get('time_to_first_accepted_sec')}",
         "",
         "## End-to-End Timeline",
     ]
@@ -405,6 +447,8 @@ def render_report(snapshot: dict, analysis: dict, output_dir: Path) -> None:
         lines.append(
             f"- RUNNING `{item['step_id']}` `{item['action_type']}` since {item.get('started_at')}"
         )
+        if item.get("heartbeat_at"):
+            lines.append(f"  heartbeat=`{item.get('heartbeat_at')}` progress=`{json.dumps(item.get('progress') or {}, ensure_ascii=False)}`")
     for item in analysis.get("failed_steps", []):
         lines.append(
             f"- FAILED `{item['step_id']}` `{item['action_type']}` from {item.get('started_at')} to {item.get('ended_at')} "
@@ -417,7 +461,7 @@ def render_report(snapshot: dict, analysis: dict, output_dir: Path) -> None:
     lines.extend(
         [
             "",
-            "## Phase 9 Alignment",
+            "## Phase Alignment",
             f"- Retrieval profile present: `{flags.get('retrieval_profile_present')}`",
             f"- Deterministic pre-AI statuses present: `{flags.get('pre_ai_status_present')}`",
             f"- Batch-level decisions present: `{flags.get('batch_decision_present')}`",
@@ -435,9 +479,9 @@ def render_report(snapshot: dict, analysis: dict, output_dir: Path) -> None:
     )
 
     if flags.get("retrieval_profile_present") and flags.get("pre_ai_status_present") and flags.get("batch_decision_present"):
-        lines.append("- Phase 9 runtime signals are visible in production artifacts: retrieval profile, deterministic gating, and batch health are present.")
+        lines.append("- Current phase runtime signals are visible in production artifacts: retrieval profile, deterministic gating, and batch health are present.")
     else:
-        lines.append("- Phase 9 logic is not fully observable from production artifacts yet.")
+        lines.append("- Current phase logic is not fully observable from production artifacts yet.")
 
     if analysis.get("accepted_total", 0) == 0:
         lines.append("- The current run has not produced any ACCEPTED records yet, so business-value output is still weak even though gating is running.")

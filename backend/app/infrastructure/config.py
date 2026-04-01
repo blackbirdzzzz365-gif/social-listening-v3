@@ -73,6 +73,13 @@ class Settings(BaseSettings):
     retrieval_max_query_variants: int = 2
     pre_ai_mode: str = "strict"
     judge_high_confidence_threshold: float = 0.75
+    step_heartbeat_interval_sec: float = 10.0
+    search_posts_timeout_sec: float = 300.0
+    search_in_group_timeout_sec: float = 240.0
+    crawl_feed_timeout_sec: float = 240.0
+    crawl_comments_timeout_sec: float = 240.0
+    search_groups_timeout_sec: float = 120.0
+    group_membership_timeout_sec: float = 120.0
 
     model_config = SettingsConfigDict(
         env_file=".env",

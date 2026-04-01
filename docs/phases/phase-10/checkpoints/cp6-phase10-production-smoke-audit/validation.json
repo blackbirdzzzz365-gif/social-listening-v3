@@ -1,0 +1,11 @@
+{
+  "cp": "cp6-phase9-production-smoke-audit",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "",
+  "summary": "",
+  "checks": [],
+  "issues": [],
+  "ready_for_next_cp": false,
+  "next_cp": ""
+}

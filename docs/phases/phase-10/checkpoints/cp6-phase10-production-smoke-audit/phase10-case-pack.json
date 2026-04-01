@@ -1,0 +1,26 @@
+{
+  "pack_id": "phase-10-core",
+  "description": "Checkpoint-local copy of the Phase 10 production smoke pack.",
+  "defaults": {
+    "base_url": "https://social-listening-v3.blackbirdzzzz.art",
+    "ssh_target": "chiasegpu-vm",
+    "container": "social-listening-v3",
+    "report_root": "reports/production",
+    "interval_sec": 120,
+    "approval_mode": "read-only"
+  },
+  "cases": [
+    {
+      "id": "phase10-fe-credit-answer-closeout",
+      "mode": "live_api_flow",
+      "topic": "Suy nghi cua khach hang ve vay nhanh tien mat qua FE Credit",
+      "phase": "phase-10"
+    },
+    {
+      "id": "phase10-ngu-hoa-image-bearing",
+      "mode": "live_api_flow",
+      "topic": "Review co hinh anh ve mat na Ngu Hoa truoc va sau khi dung",
+      "phase": "phase-10"
+    }
+  ]
+}

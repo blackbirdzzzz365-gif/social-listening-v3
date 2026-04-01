@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from camoufox.async_api import AsyncCamoufox
@@ -25,6 +25,9 @@ class SessionExpiredException(RuntimeError):
 
 class BrowserStartupError(RuntimeError):
     pass
+
+
+ProgressCallback = Callable[[dict[str, Any]], Awaitable[None] | None]
 
 
 class RawPost(dict):
@@ -221,10 +224,24 @@ class BrowserAgent:
         payload = json.loads(self._mock_session_file.read_text(encoding="utf-8"))
         return payload.get("account_id_hash")
 
-    async def search_groups(self, query: str, *, target_count: int = 3) -> dict[str, Any]:
+    async def search_groups(
+        self,
+        query: str,
+        *,
+        target_count: int = 3,
+        progress_callback: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
         await self.assert_session_valid()
         await self.start()
         assert self._page is not None
+        await self._emit_progress(
+            progress_callback,
+            {
+                "activity": "navigating_group_search",
+                "query": query,
+                "target_count": target_count,
+            },
+        )
         await self._page.goto(
             f"https://www.facebook.com/search/groups/?q={quote(query)}",
             wait_until="domcontentloaded",
@@ -257,6 +274,14 @@ class BrowserAgent:
                 }
             )
             seen_group_ids.add(group_id)
+            await self._emit_progress(
+                progress_callback,
+                {
+                    "activity": "scanning_group_cards",
+                    "query": query,
+                    "discovered_groups": len(groups),
+                },
+            )
             if len(groups) >= target_count:
                 break
 
@@ -275,7 +300,12 @@ class BrowserAgent:
             "primary_group_id": primary_group["group_id"],
         }
 
-    async def join_group(self, group_id: str) -> dict[str, Any]:
+    async def join_group(
+        self,
+        group_id: str,
+        *,
+        progress_callback: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
         await self.assert_session_valid()
         if self._settings.browser_mock_mode:
             await asyncio.sleep(0.2)
@@ -287,6 +317,7 @@ class BrowserAgent:
 
         await self.start()
         assert self._page is not None
+        await self._emit_progress(progress_callback, {"activity": "opening_group", "group_id": group_id})
         await self._page.goto(f"https://www.facebook.com/groups/{group_id}", wait_until="domcontentloaded")
         await asyncio.sleep(2)
         initial_state = await self._inspect_group_state(group_id)
@@ -320,6 +351,7 @@ class BrowserAgent:
             locator = self._page.locator(selector).first
             if await locator.count():
                 try:
+                    await self._emit_progress(progress_callback, {"activity": "clicking_join", "group_id": group_id})
                     await locator.click(timeout=3000)
                     await asyncio.sleep(2)
                     clicked = True
@@ -346,7 +378,12 @@ class BrowserAgent:
             "action_labels": refreshed_state["action_labels"],
         }
 
-    async def check_join_status(self, group_id: str) -> dict[str, Any]:
+    async def check_join_status(
+        self,
+        group_id: str,
+        *,
+        progress_callback: ProgressCallback | None = None,
+    ) -> dict[str, Any]:
         await self.assert_session_valid()
         if self._settings.browser_mock_mode:
             await asyncio.sleep(0.1)
@@ -361,6 +398,7 @@ class BrowserAgent:
 
         await self.start()
         assert self._page is not None
+        await self._emit_progress(progress_callback, {"activity": "checking_membership", "group_id": group_id})
         await self._page.goto(f"https://www.facebook.com/groups/{group_id}", wait_until="domcontentloaded")
         await asyncio.sleep(2)
         state = await self._inspect_group_state(group_id)
@@ -378,6 +416,7 @@ class BrowserAgent:
         *,
         target_count: int = 10,
         filter_recent: bool = True,
+        progress_callback: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         await self.assert_session_valid()
         if self._settings.browser_mock_mode:
@@ -385,6 +424,14 @@ class BrowserAgent:
 
         await self.start()
         assert self._page is not None
+        await self._emit_progress(
+            progress_callback,
+            {
+                "activity": "navigating_post_search",
+                "query": query,
+                "target_count": target_count,
+            },
+        )
         await self._page.goto(
             f"https://www.facebook.com/search/posts/?q={quote(query)}",
             wait_until="domcontentloaded",
@@ -392,6 +439,7 @@ class BrowserAgent:
         await asyncio.sleep(3)
 
         if filter_recent:
+            await self._emit_progress(progress_callback, {"activity": "applying_recent_filter", "query": query})
             await self._apply_recent_filter()
 
         posts: list[dict[str, Any]] = []
@@ -421,6 +469,16 @@ class BrowserAgent:
                             "status": post_data.get("source_group_status") or "unknown",
                             "can_access": bool(post_data.get("source_group_can_access")),
                         }
+                await self._emit_progress(
+                    progress_callback,
+                    {
+                        "activity": "scanning_search_results",
+                        "query": query,
+                        "collected_count": len(posts),
+                        "discovered_group_count": len(discovered_groups),
+                        "idle_scrolls": idle_scrolls,
+                    },
+                )
 
             if len(posts) == before_count:
                 idle_scrolls += 1
@@ -432,6 +490,14 @@ class BrowserAgent:
             await asyncio.sleep(3)
 
         for group_id, group in list(discovered_groups.items()):
+            await self._emit_progress(
+                progress_callback,
+                {
+                    "activity": "inspecting_discovered_group",
+                    "group_id": group_id,
+                    "query": query,
+                },
+            )
             await self._page.goto(
                 f"https://www.facebook.com/groups/{group_id}",
                 wait_until="domcontentloaded",
@@ -457,6 +523,7 @@ class BrowserAgent:
         target_count: int = 20,
         parent_post_id: str | None = None,
         source_group_id: str | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> list[RawPost]:
         await self.assert_session_valid()
         if self._settings.browser_mock_mode:
@@ -464,6 +531,14 @@ class BrowserAgent:
 
         await self.start()
         assert self._page is not None
+        await self._emit_progress(
+            progress_callback,
+            {
+                "activity": "opening_post_for_comments",
+                "post_url": post_url,
+                "target_count": target_count,
+            },
+        )
         await self._page.goto(post_url, wait_until="domcontentloaded")
         await asyncio.sleep(3)
 
@@ -483,6 +558,14 @@ class BrowserAgent:
                         await locator.click(timeout=3000)
                         await asyncio.sleep(2)
                         clicked = True
+                        await self._emit_progress(
+                            progress_callback,
+                            {
+                                "activity": "expanding_comments",
+                                "post_url": post_url,
+                                "idle_expands": idle_expands,
+                            },
+                        )
                         break
                     except Exception:
                         continue
@@ -568,6 +651,14 @@ class BrowserAgent:
                     "indent": normalized_indent,
                 }
             )
+            await self._emit_progress(
+                progress_callback,
+                {
+                    "activity": "extracting_comments",
+                    "post_url": post_url,
+                    "collected_count": len(comments),
+                },
+            )
         return comments
 
     async def search_in_group(
@@ -576,6 +667,7 @@ class BrowserAgent:
         query: str,
         *,
         target_count: int = 10,
+        progress_callback: ProgressCallback | None = None,
     ) -> list[RawPost]:
         await self.assert_session_valid()
         if self._settings.browser_mock_mode:
@@ -584,6 +676,15 @@ class BrowserAgent:
         await self.start()
         assert self._page is not None
         url = f"https://www.facebook.com/groups/{group_id}/search/?q={quote(query)}"
+        await self._emit_progress(
+            progress_callback,
+            {
+                "activity": "navigating_group_post_search",
+                "group_id": group_id,
+                "query": query,
+                "target_count": target_count,
+            },
+        )
         await self._page.goto(url, wait_until="domcontentloaded")
         await asyncio.sleep(3)
 
@@ -626,6 +727,16 @@ class BrowserAgent:
                         comment_count=0,
                     )
                 )
+                await self._emit_progress(
+                    progress_callback,
+                    {
+                        "activity": "scanning_group_results",
+                        "group_id": group_id,
+                        "query": query,
+                        "collected_count": len(posts),
+                        "idle_scrolls": idle_scrolls,
+                    },
+                )
             if len(posts) == before_count:
                 idle_scrolls += 1
             else:
@@ -642,6 +753,7 @@ class BrowserAgent:
         group_id: str,
         target_count: int,
         checkpoint: dict[str, Any] | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> list[RawPost]:
         await self.assert_session_valid()
         start_index = int((checkpoint or {}).get("collected_count", 0))
@@ -656,6 +768,15 @@ class BrowserAgent:
         await self.start()
         assert self._page is not None
         url = f"https://www.facebook.com/groups/{group_id}"
+        await self._emit_progress(
+            progress_callback,
+            {
+                "activity": "opening_group_feed",
+                "group_id": group_id,
+                "target_count": target_count,
+                "resume_from": start_index,
+            },
+        )
         await self._page.goto(url, wait_until="domcontentloaded")
         await asyncio.sleep(2)
 
@@ -691,6 +812,15 @@ class BrowserAgent:
                         reaction_count=0,
                         comment_count=0,
                     )
+                )
+                await self._emit_progress(
+                    progress_callback,
+                    {
+                        "activity": "scanning_feed_posts",
+                        "group_id": group_id,
+                        "collected_count": len(posts) + start_index,
+                        "idle_scrolls": idle_scrolls,
+                    },
                 )
                 if len(posts) + start_index >= target_count:
                     break
@@ -1190,6 +1320,17 @@ class BrowserAgent:
             return f"fb-comment-{self._hash_stable_value(comment_url.lower())}"
         normalized = re.sub(r"\s+", " ", comment_text).strip().lower()[:120]
         return f"fb-comment-{self._hash_stable_value(f'{parent_post_id}|{ordinal}|{normalized}')}"
+
+    async def _emit_progress(
+        self,
+        progress_callback: ProgressCallback | None,
+        payload: dict[str, Any],
+    ) -> None:
+        if progress_callback is None:
+            return
+        maybe_coro = progress_callback(payload)
+        if asyncio.iscoroutine(maybe_coro):
+            await maybe_coro
 
     def _build_mock_search_posts(self, query: str, target_count: int) -> dict[str, Any]:
         groups = [

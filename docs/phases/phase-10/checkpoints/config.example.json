@@ -1,0 +1,6 @@
+{
+  "ntfy_topic": "social-listening-v3-phase-10-change-this",
+  "ntfy_base": "https://ntfy.sh",
+  "dashboard_url": "http://localhost:3000",
+  "project_slug": "ai-facebook-social-listening-engagement-v3-phase-10"
+}

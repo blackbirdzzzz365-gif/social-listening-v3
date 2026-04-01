@@ -1,0 +1,19 @@
+{
+  "cp": "cp1-browser-run-safety",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-03-31T22:11:38+0700",
+  "summary": "Implemented browser admission control so browser-backed runs queue instead of racing on the shared persistent profile, and added failure classification for browser bootstrap errors.",
+  "artifacts": [
+    "backend/app/services/browser_run_admission.py",
+    "backend/app/infra/browser_agent.py",
+    "backend/app/services/runner.py",
+    "backend/app/infrastructure/lifespan.py",
+    "backend/app/models/run.py",
+    "backend/app/schemas/runs.py",
+    "backend/alembic/versions/013_add_phase9_run_state_fields.py",
+    "backend/tests/test_browser_run_admission.py"
+  ],
+  "issues": [],
+  "notes": "Run status now exposes QUEUED and failure_class so monitor/UI can separate admission wait from infra failure."
+}

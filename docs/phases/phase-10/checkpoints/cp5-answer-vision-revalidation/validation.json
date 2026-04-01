@@ -1,0 +1,15 @@
+{
+  "cp": "cp5-vision-validation-harness",
+  "role": "validator",
+  "status": "PASS",
+  "timestamp": "2026-03-31T22:11:38+0700",
+  "summary": "Vision validation harness passed locally. Unit tests prove the OCR/image path can trigger and upgrade an uncertain record, and the Phase 9 docs define the minimum production validation standard.",
+  "checks": [
+    "backend/tests/test_phase8_gating.py proves image fallback can trigger and upgrade UNCERTAIN -> ACCEPTED.",
+    "docs/phases/phase-9/vision-validation-scenarios.md defines scenarios, metrics, and minimum validation rules.",
+    "Production case pack includes an image-bearing skincare case and monitoring now reports image fallback counts explicitly."
+  ],
+  "issues": [],
+  "ready_for_next_cp": true,
+  "next_cp": "cp6-phase9-production-smoke-audit"
+}

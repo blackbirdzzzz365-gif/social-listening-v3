@@ -1,0 +1,77 @@
+{
+  "repo": {
+    "name": "social-listening-v3",
+    "default_worktree_root": "../social-listening-v3-worktrees"
+  },
+  "current": "phase-10",
+  "phases": {
+    "phase-1": {
+      "name": "Production Foundation",
+      "status": "completed"
+    },
+    "phase-2": {
+      "name": "AI Labeling And Theme Pipeline",
+      "status": "completed"
+    },
+    "phase-3": {
+      "name": "Retrieval Quality Hardening",
+      "status": "completed"
+    },
+    "phase-4": {
+      "name": "UI Refactor And Shared Shell Cleanup",
+      "status": "completed"
+    },
+    "phase-5": {
+      "name": "Production Recovery Iteration",
+      "status": "completed"
+    },
+    "phase-6": {
+      "name": "Responsive Browser And Mobile Runtime",
+      "status": "completed"
+    },
+    "phase-7": {
+      "name": "Research-Aware Retrieval In Production",
+      "status": "completed"
+    },
+    "phase-8": {
+      "name": "Research-Aware Model Gating In Production Workflow",
+      "status": "completed"
+    },
+    "phase-9": {
+      "name": "Production-Safe Answer Delivery",
+      "status": "completed",
+      "branch": "codex/phase-9",
+      "docs_root": "docs/phases/phase-9",
+      "report_root": "reports/production",
+      "summary": "Phase 9 is the current production iteration. It focuses on browser run safety, answer closeout, yield-aware routing, reason-aware reformulation, and vision validation."
+    },
+    "phase-10": {
+      "name": "Execution Control And Production Observability",
+      "status": "active",
+      "branch": "codex/phase-10",
+      "docs_root": "docs/phases/phase-10",
+      "report_root": "reports/production",
+      "summary": "Phase 10 hardens stop semantics, step heartbeat, timeout taxonomy, audit tooling, and production revalidation for answer closeout and image-bearing cases."
+    }
+  },
+  "production_loop": {
+    "operating_model": "docs/codex-product-loop.md",
+    "default_case_pack": "docs/production/case-packs/phase-10-core.json",
+    "report_root": "reports/production",
+    "checkpoint_verdict_template": "docs/templates/checkpoint-verdict-template.md",
+    "phase_manifest_template": "docs/templates/phase-manifest-template.md",
+    "candidate_summary_template": "docs/templates/candidate-summary-template.md",
+    "skills": {
+      "playbook": "social-listening-v3-product-loop",
+      "audit": "social-listening-v3-production-audit",
+      "executor": "social-listening-v3-phase-executor"
+    },
+    "artifact_conventions": {
+      "checkpoint_verdict_dir": "docs/phases/<current-phase>/analysis",
+      "contained_fix_dir": "docs/phases/<current-phase>/patches/<YYYYMMDD>-<slug>",
+      "new_phase_dir": "docs/phases/<next-phase>",
+      "candidate_summary_name": "candidate-summary.md",
+      "phase_manifest_name": "phase-manifest.md"
+    }
+  }
+}

@@ -12,7 +12,7 @@ class PlanRun(Base):
     __tablename__ = "plan_runs"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('QUEUED','RUNNING','PAUSED','DONE','FAILED','CANCELLED')",
+            "status IN ('QUEUED','RUNNING','PAUSED','CANCELLING','DONE','FAILED','CANCELLED')",
             name="ck_plan_runs_status",
         ),
     )

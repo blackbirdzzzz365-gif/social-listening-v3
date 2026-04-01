@@ -1,0 +1,63 @@
+{
+  "pack_id": "phase-10-core",
+  "description": "Default production case pack for Phase 10. Run only 1-2 live cases at a time.",
+  "defaults": {
+    "base_url": "https://social-listening-v3.blackbirdzzzz.art",
+    "ssh_target": "chiasegpu-vm",
+    "container": "social-listening-v3",
+    "report_root": "reports/production",
+    "interval_sec": 120,
+    "approval_mode": "read-only"
+  },
+  "cases": [
+    {
+      "id": "phase10-fe-credit-answer-closeout",
+      "mode": "live_api_flow",
+      "topic": "Suy nghi cua khach hang ve vay nhanh tien mat qua FE Credit",
+      "phase": "phase-10",
+      "focus": "FE Credit vay nhanh tien mat",
+      "audience": "Tap trung vao feedback that ve trust, complaint, phi, va trai nghiem su dung FE Credit tai Viet Nam.",
+      "comparison_policy": "Ghi nhan so sanh neu giup ly giai trust hoac complaint, nhung uu tien feedback that ve FE Credit.",
+      "timeframe": "Tap trung 12 thang gan nhat.",
+      "expectation": "Case nay dung de recheck answer closeout sau khi stop semantics va heartbeat da duoc sua.",
+      "success_signals": [
+        "step heartbeat ro rang khi dang chay",
+        "run khong bi cancel leakage",
+        "answer_status dat terminal business state ro rang"
+      ]
+    },
+    {
+      "id": "phase10-ngu-hoa-image-bearing",
+      "mode": "live_api_flow",
+      "topic": "Review co hinh anh ve mat na Ngu Hoa truoc va sau khi dung",
+      "phase": "phase-10",
+      "focus": "feedback co hinh anh ve Ngu Hoa",
+      "audience": "Tap trung vao bai review co anh, screenshot, hoac bang chung truc quan lien quan den Ngu Hoa.",
+      "comparison_policy": "Ghi nhan so sanh neu no den tu review co anh hoac bang chung truc quan.",
+      "timeframe": "Tap trung 12 thang gan nhat.",
+      "expectation": "Case nay dung de kiem tra heartbeat, timeout handling, va vision auditability tren mot use case image-bearing.",
+      "vision_policy": "Uu tien image-bearing evidence va ghi ro neu vision khong thay doi duoc decision.",
+      "success_signals": [
+        "step-1 co heartbeat thay vi treo am tham",
+        "co image-bearing evidence hoac ly do ro rang vi sao khong co",
+        "artifact cuoi cung cho phep ket luan vision da duoc validate den muc nao"
+      ]
+    },
+    {
+      "id": "phase10-tpbank-evo-closeout",
+      "mode": "live_api_flow",
+      "topic": "Phan hoi khach hang ve TPBank EVO",
+      "phase": "phase-10",
+      "focus": "TPBank EVO",
+      "audience": "Tap trung vao khach hang dang dung hoac da trai nghiem TPBank EVO tai Viet Nam.",
+      "comparison_policy": "Van ghi nhan so sanh voi ngan hang khac, nhung uu tien feedback that ve TPBank EVO.",
+      "timeframe": "Tap trung 6 thang gan nhat.",
+      "expectation": "Case nay dung de doi chieu answer closeout voi mot topic banking quen thuoc trong repo.",
+      "success_signals": [
+        "monitor artifact dung schema moi",
+        "run co failure taxonomy ro rang neu fail",
+        "co answer-ready hoac no-answer verdict co ly do"
+      ]
+    }
+  ]
+}

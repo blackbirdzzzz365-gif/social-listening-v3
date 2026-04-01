@@ -15,6 +15,8 @@ class StepRunSchema(BaseModel):
     step_id: str
     action_type: str
     status: str
+    started_at: str | None = None
+    ended_at: str | None = None
     read_or_write: str
     target: str
     actual_count: int | None
