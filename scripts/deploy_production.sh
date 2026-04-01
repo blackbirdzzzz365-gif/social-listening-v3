@@ -14,6 +14,10 @@ deploy_env_file="${deploy_dir}/deploy.env"
 
 mkdir -p "$deploy_dir"
 
+if [ -n "${GHCR_USERNAME:-}" ] && [ -n "${GHCR_TOKEN:-}" ]; then
+  printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USERNAME" --password-stdin
+fi
+
 previous_sha=""
 previous_image_ref=""
 if [ -f "$state_file" ]; then

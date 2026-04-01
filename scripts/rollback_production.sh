@@ -6,6 +6,8 @@ ROLLBACK_SHA="${ROLLBACK_SHA:-}"
 
 cd "$APP_DIR"
 
+git config core.fileMode false
+
 state_file="${APP_DIR}/.deploy/production-state.env"
 if [ ! -f "$state_file" ]; then
   echo "Missing ${state_file}; cannot determine rollback target." >&2

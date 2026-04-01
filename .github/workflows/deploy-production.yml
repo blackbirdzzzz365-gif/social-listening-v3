@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: production-deploy
@@ -45,11 +46,18 @@ jobs:
         env:
           DEPLOY_SHA: ${{ steps.vars.outputs.sha }}
           IMAGE_REF: ${{ steps.vars.outputs.image_ref }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN_B64: ${{ github.token }}
         run: |
+          ghcr_token_b64="$(printf '%s' "${GHCR_TOKEN_B64}" | base64 -w0)"
           ssh -p 55463 ubuntu@e1.chiasegpu.vn \
-            "export APP_DIR='/home/ubuntu/social-listening-v3' DEPLOY_SHA='${DEPLOY_SHA}' IMAGE_REF='${IMAGE_REF}'; bash -s" <<'REMOTE'
+            "export APP_DIR='/home/ubuntu/social-listening-v3' DEPLOY_SHA='${DEPLOY_SHA}' IMAGE_REF='${IMAGE_REF}' GHCR_USERNAME='${GHCR_USERNAME}' GHCR_TOKEN_B64='${ghcr_token_b64}'; bash -s" <<'REMOTE'
           set -euo pipefail
+          if [ -n "${GHCR_TOKEN_B64:-}" ]; then
+            export GHCR_TOKEN="$(printf '%s' "${GHCR_TOKEN_B64}" | base64 -d)"
+          fi
           cd "$APP_DIR"
+          git config core.fileMode false
           previous_head="$(git rev-parse HEAD 2>/dev/null || true)"
           git fetch origin --prune
           git checkout --detach "$DEPLOY_SHA"

@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: production-deploy
@@ -36,10 +37,16 @@ jobs:
       - name: Roll back on production server
         env:
           ROLLBACK_SHA: ${{ inputs.rollback_sha }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN_B64: ${{ github.token }}
         run: |
+          ghcr_token_b64="$(printf '%s' "${GHCR_TOKEN_B64}" | base64 -w0)"
           ssh -p 55463 ubuntu@e1.chiasegpu.vn \
-            "export APP_DIR='/home/ubuntu/social-listening-v3' ROLLBACK_SHA='${ROLLBACK_SHA}'; bash -s" <<'REMOTE'
+            "export APP_DIR='/home/ubuntu/social-listening-v3' ROLLBACK_SHA='${ROLLBACK_SHA}' GHCR_USERNAME='${GHCR_USERNAME}' GHCR_TOKEN_B64='${ghcr_token_b64}'; bash -s" <<'REMOTE'
           set -euo pipefail
+          if [ -n "${GHCR_TOKEN_B64:-}" ]; then
+            export GHCR_TOKEN="$(printf '%s' "${GHCR_TOKEN_B64}" | base64 -d)"
+          fi
           cd "$APP_DIR"
           git fetch origin --prune
           chmod +x scripts/*.sh
