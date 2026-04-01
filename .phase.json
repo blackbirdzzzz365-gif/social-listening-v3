@@ -3,7 +3,7 @@
     "name": "social-listening-v3",
     "default_worktree_root": "../social-listening-v3-worktrees"
   },
-  "current": "phase-11",
+  "current": "phase-12",
   "phases": {
     "phase-1": {
       "name": "Production Foundation",
@@ -60,11 +60,19 @@
       "docs_root": "docs/phases/phase-11",
       "report_root": "reports/production",
       "summary": "Phase 11 hardens planner provider resilience, planning observability, image-first retrieval posture, and timeout salvage for image-bearing production cases."
+    },
+    "phase-12": {
+      "name": "No-Answer Closeout And Goal-Aware Exhaustion",
+      "status": "active",
+      "branch": "codex/phase-12",
+      "docs_root": "docs/phases/phase-12",
+      "report_root": "reports/production",
+      "summary": "Phase 12 ensures zero-evidence runs still produce a final user-facing outcome and stops obviously exhausted plans earlier."
     }
   },
   "production_loop": {
     "operating_model": "docs/codex-product-loop.md",
-    "default_case_pack": "docs/production/case-packs/phase-11-core.json",
+    "default_case_pack": "docs/production/case-packs/phase-12-core.json",
     "report_root": "reports/production",
     "checkpoint_verdict_template": "docs/templates/checkpoint-verdict-template.md",
     "phase_manifest_template": "docs/templates/phase-manifest-template.md",

@@ -1,0 +1,10 @@
+{
+  "cp": "cp5-phase12-production-revalidation",
+  "role": "validator",
+  "status": "PARTIAL",
+  "timestamp": "2026-04-02T02:05:00+07:00",
+  "summary": "Waiting for production deployment and live case reruns.",
+  "checks": [],
+  "issues": [],
+  "ready_for_next_cp": false
+}

@@ -36,6 +36,25 @@ type RunResponse = {
   completion_reason?: string | null;
   failure_class?: string | null;
   answer_status?: string | null;
+  answer_generated_at?: string | null;
+  answer_payload?: {
+    outcome_type?: string;
+    title?: string;
+    summary?: string;
+    evidence_stats?: Record<string, number | boolean | null>;
+    dominant_reject_reasons?: Array<{ reason_code: string; count: number }>;
+    attempted_queries?: Array<{
+      step_id?: string;
+      action_type?: string;
+      query?: string;
+      collected_count?: number;
+      accepted_count?: number;
+      stop_reason?: string | null;
+      reason_cluster?: string | null;
+      used_reformulation?: boolean;
+    }>;
+    recommended_next_actions?: string[];
+  } | null;
   total_records: number;
   steps: StepRun[];
 };
@@ -301,7 +320,66 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
             {run.answer_status ? (
               <KeyValueRow label="answer status" value={<StatusBadge status={run.answer_status} />} />
             ) : null}
+            {run.answer_generated_at ? (
+              <KeyValueRow label="answer generated" value={run.answer_generated_at} />
+            ) : null}
             <KeyValueRow label="records" value={run.total_records} />
+            {run.answer_payload ? (
+              <Paper p="sm" radius="md" withBorder>
+                <Stack gap="xs">
+                  <Text fw={700} size="sm">
+                    {run.answer_payload.title || "Final outcome"}
+                  </Text>
+                  {run.answer_payload.outcome_type ? (
+                    <StatusBadge status={run.answer_payload.outcome_type} />
+                  ) : null}
+                  {run.answer_payload.summary ? <Text size="sm">{run.answer_payload.summary}</Text> : null}
+                  {run.answer_payload.evidence_stats ? (
+                    <Code block className="sl-code-block">
+                      {JSON.stringify(run.answer_payload.evidence_stats, null, 2)}
+                    </Code>
+                  ) : null}
+                  {run.answer_payload.dominant_reject_reasons?.length ? (
+                    <Stack gap="xs">
+                      <Text fw={600} size="sm">
+                        Dominant reject reasons
+                      </Text>
+                      <Stack gap={4}>
+                        {run.answer_payload.dominant_reject_reasons.map((item) => (
+                          <Badge key={item.reason_code} variant="light">
+                            {item.reason_code}: {item.count}
+                          </Badge>
+                        ))}
+                      </Stack>
+                    </Stack>
+                  ) : null}
+                  {run.answer_payload.attempted_queries?.length ? (
+                    <Stack gap="xs">
+                      <Text fw={600} size="sm">
+                        Attempted queries
+                      </Text>
+                      <Code block className="sl-code-block">
+                        {JSON.stringify(run.answer_payload.attempted_queries, null, 2)}
+                      </Code>
+                    </Stack>
+                  ) : null}
+                  {run.answer_payload.recommended_next_actions?.length ? (
+                    <Stack gap="xs">
+                      <Text fw={600} size="sm">
+                        Recommended next actions
+                      </Text>
+                      <Stack gap={4}>
+                        {run.answer_payload.recommended_next_actions.map((action) => (
+                          <Text key={action} size="sm">
+                            - {action}
+                          </Text>
+                        ))}
+                      </Stack>
+                    </Stack>
+                  ) : null}
+                </Stack>
+              </Paper>
+            ) : null}
             {run.steps.map((step) => (
               <Paper key={step.step_run_id} p="sm" radius="md" withBorder>
                 <Stack gap={6}>

@@ -1,0 +1,14 @@
+{
+  "cp": "cp2-no-answer-closeout-service",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-04-02T02:05:00+07:00",
+  "summary": "Deterministic closeout now persists final no-answer payloads for NO_ELIGIBLE_RECORDS and NO_ANSWER_CONTENT.",
+  "artifacts": [
+    "backend/app/services/run_closeout.py",
+    "backend/app/services/label_job_service.py",
+    "backend/tests/test_run_closeout.py"
+  ],
+  "issues": [],
+  "notes": ""
+}

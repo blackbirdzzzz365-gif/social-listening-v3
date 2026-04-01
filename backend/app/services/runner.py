@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 import json
 import re
 import time
@@ -121,6 +122,7 @@ class RunnerService:
                 failure_class=None,
                 answer_status=None,
                 answer_generated_at=None,
+                answer_payload_json=None,
                 started_at=started_at,
                 total_records=0,
             )
@@ -266,6 +268,7 @@ class RunnerService:
                 "failure_class": run.failure_class,
                 "answer_status": run.answer_status,
                 "answer_generated_at": run.answer_generated_at,
+                "answer_payload": None if not run.answer_payload_json else json.loads(run.answer_payload_json),
                 "started_at": run.started_at,
                 "ended_at": run.ended_at,
                 "total_records": run.total_records,
@@ -328,6 +331,7 @@ class RunnerService:
                 if label_summary.get("status") == NO_ELIGIBLE_RECORDS_STATUS:
                     completion_reason = "NO_ELIGIBLE_RECORDS"
                     emitted_status = "DONE_NO_ELIGIBLE_RECORDS"
+                    closeout_summary = self._label_job_service.get_closeout_summary(run_id)
                 else:
                     terminal = await self._label_job_service.wait_for_run(run_id)
                     label_summary = terminal.get("label_summary")
@@ -362,7 +366,16 @@ class RunnerService:
                     "status": emitted_status,
                     "completion_reason": completion_reason,
                     "label_status": None if label_summary is None else label_summary.get("status"),
-                    "answer_status": None if closeout_summary is None else closeout_summary.get("answer_status"),
+                    "answer_status": (
+                        None
+                        if closeout_summary is None
+                        else closeout_summary.get("answer_status")
+                    )
+                    or (
+                        NO_ELIGIBLE_RECORDS_STATUS
+                        if completion_reason == "NO_ELIGIBLE_RECORDS"
+                        else None
+                    ),
                 },
             )
         except RunCancellationRequested:
@@ -508,6 +521,7 @@ class RunnerService:
                 return False
 
     async def _mark_step_done(self, run_id: str, step_run_id: str, result: dict[str, Any]) -> None:
+        exhaustion_summary: dict[str, Any] | None = None
         with SessionLocal() as session:
             step_run = session.get(StepRun, step_run_id)
             run = session.get(PlanRun, run_id)
@@ -520,6 +534,7 @@ class RunnerService:
             step_run.checkpoint = checkpoint
             step_run.checkpoint_json = checkpoint
             run.total_records = self._count_run_records(session, run_id)
+            exhaustion_summary = self._apply_goal_aware_exhaustion(session, run_id)
             session.add(step_run)
             session.add(run)
             session.commit()
@@ -530,6 +545,7 @@ class RunnerService:
                 "run_id": run_id,
                 "step_run_id": step_run_id,
                 "actual_count": result.get("actual_count"),
+                "goal_aware_exhaustion": exhaustion_summary,
             },
         )
 
@@ -540,6 +556,129 @@ class RunnerService:
             )
             or 0
         )
+
+    def _apply_goal_aware_exhaustion(self, session: Any, run_id: str) -> dict[str, Any] | None:
+        if not bool(getattr(self._settings, "goal_aware_exhaustion_enabled", True)):
+            return None
+        run = session.get(PlanRun, run_id)
+        if run is None or run.status in {"DONE", "FAILED", "CANCELLED"}:
+            return None
+        step_runs = session.scalars(select(StepRun).where(StepRun.run_id == run_id)).all()
+        pending_step_runs = [step_run for step_run in step_runs if step_run.status == "PENDING"]
+        if not pending_step_runs:
+            return None
+        if any(
+            self._load_checkpoint(step_run).get("skip_reason") == "goal_aware_exhaustion"
+            for step_run in step_runs
+            if step_run.status == "SKIPPED"
+        ):
+            return None
+
+        step_map = {
+            step.step_id: step
+            for step in session.scalars(select(PlanStep).where(PlanStep.plan_id == run.plan_id)).all()
+        }
+        completed_search_steps = 0
+        zero_accept_search_steps = 0
+        total_accepted = 0
+        total_scanned = 0
+        cluster_counter: Counter[str] = Counter()
+        stop_reason_counter: Counter[str] = Counter()
+
+        for step_run in step_runs:
+            if step_run.status != "DONE":
+                continue
+            step = step_map.get(step_run.step_id)
+            if step is None or step.action_type not in {"SEARCH_POSTS", "SEARCH_IN_GROUP", "CRAWL_FEED"}:
+                continue
+            metrics = self._summarize_search_step(step_run)
+            if metrics["scanned_count"] <= 0:
+                continue
+            completed_search_steps += 1
+            total_accepted += metrics["accepted_count"]
+            total_scanned += metrics["scanned_count"]
+            if metrics["accepted_count"] == 0:
+                zero_accept_search_steps += 1
+            cluster_counter.update(metrics["reason_clusters"])
+            stop_reason_counter.update(metrics["stop_reasons"])
+
+        if total_accepted > 0:
+            return None
+        min_search_steps = max(1, int(getattr(self._settings, "goal_aware_min_search_steps", 2) or 2))
+        min_scanned_records = max(20, int(getattr(self._settings, "goal_aware_min_scanned_records", 120) or 120))
+        if completed_search_steps < min_search_steps or total_scanned < min_scanned_records:
+            return None
+
+        dominant_cluster = cluster_counter.most_common(1)[0][0] if cluster_counter else None
+        weak_stop_reasons = {"zero_accepted_batches_exceeded", "weak_batches_exceeded", "min_accepts_not_reached"}
+        if dominant_cluster not in {"generic_weak", "target_weak", "promo_noise"} and not any(
+            reason in weak_stop_reasons for reason in stop_reason_counter
+        ):
+            return None
+
+        skipped_step_ids = [get_public_step_id(step_run.step_id) for step_run in pending_step_runs]
+        summary = {
+            "trigger": "goal_aware_exhaustion",
+            "completed_search_steps": completed_search_steps,
+            "zero_accept_search_steps": zero_accept_search_steps,
+            "scanned_records": total_scanned,
+            "dominant_reason_cluster": dominant_cluster,
+            "dominant_stop_reason": stop_reason_counter.most_common(1)[0][0] if stop_reason_counter else None,
+            "skipped_step_ids": skipped_step_ids,
+            "triggered_at": utc_now_iso(),
+        }
+        for step_run in pending_step_runs:
+            checkpoint = self._load_checkpoint(step_run)
+            checkpoint["phase"] = "skipped"
+            checkpoint["step_id"] = get_public_step_id(step_run.step_id)
+            checkpoint["skip_reason"] = "goal_aware_exhaustion"
+            checkpoint["skipped_at"] = summary["triggered_at"]
+            checkpoint["exhaustion_summary"] = summary
+            serialized = json.dumps(checkpoint)
+            step_run.status = "SKIPPED"
+            step_run.error_message = "skipped after goal-aware exhaustion"
+            step_run.checkpoint = serialized
+            step_run.checkpoint_json = serialized
+            session.add(step_run)
+        return summary
+
+    @staticmethod
+    def _load_checkpoint(step_run: StepRun) -> dict[str, Any]:
+        value = step_run.checkpoint or step_run.checkpoint_json or "{}"
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+
+    def _summarize_search_step(self, step_run: StepRun) -> dict[str, Any]:
+        checkpoint = self._load_checkpoint(step_run)
+        query_attempts = checkpoint.get("query_attempts") or []
+        batch_summaries = checkpoint.get("batch_summaries") or []
+        accepted_count = sum(int(item.get("accepted_count") or 0) for item in query_attempts)
+        scanned_count = sum(int(item.get("collected_count") or 0) for item in query_attempts)
+        if not query_attempts:
+            accepted_count = sum(int(item.get("accepted_count") or 0) for item in batch_summaries)
+            scanned_count = int(
+                checkpoint.get("collected_count")
+                or step_run.actual_count
+                or sum(int(item.get("batch_size") or 0) for item in batch_summaries)
+            )
+        reason_clusters = [
+            str(item.get("reason_cluster"))
+            for item in [*query_attempts, *batch_summaries]
+            if item.get("reason_cluster")
+        ]
+        stop_reasons = [
+            str(item.get("stop_reason"))
+            for item in [*query_attempts, *batch_summaries]
+            if item.get("stop_reason")
+        ]
+        return {
+            "accepted_count": accepted_count,
+            "scanned_count": scanned_count,
+            "reason_clusters": reason_clusters,
+            "stop_reasons": stop_reasons,
+        }
 
     def _resolve_action_timeout_sec(self, action_type: str) -> float:
         lookup = {

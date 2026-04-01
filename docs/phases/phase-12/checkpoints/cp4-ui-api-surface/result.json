@@ -1,0 +1,13 @@
+{
+  "cp": "cp4-ui-api-surface",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-04-02T02:05:00+07:00",
+  "summary": "Run API and monitor shell now expose a final outcome payload for no-answer states.",
+  "artifacts": [
+    "backend/app/schemas/runs.py",
+    "frontend/src/pages/MonitorPage.tsx"
+  ],
+  "issues": [],
+  "notes": ""
+}

@@ -34,6 +34,7 @@ class RunResponse(BaseModel):
     failure_class: str | None = None
     answer_status: str | None = None
     answer_generated_at: str | None = None
+    answer_payload: dict[str, Any] | None = None
     started_at: str
     ended_at: str | None
     total_records: int

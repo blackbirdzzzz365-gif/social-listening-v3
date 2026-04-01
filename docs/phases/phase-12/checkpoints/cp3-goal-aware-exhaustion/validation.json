@@ -1,0 +1,13 @@
+{
+  "cp": "cp3-goal-aware-exhaustion",
+  "role": "validator",
+  "status": "DONE",
+  "timestamp": "2026-04-02T02:05:00+07:00",
+  "summary": "Goal-aware exhaustion is covered by dedicated runner regression tests.",
+  "checks": [
+    "test_runner_phase12.py proves pending tail steps are skipped",
+    "pytest passed with the new runner regression"
+  ],
+  "issues": [],
+  "ready_for_next_cp": true
+}

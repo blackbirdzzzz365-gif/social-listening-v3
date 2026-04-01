@@ -1,0 +1,14 @@
+{
+  "cp": "cp2-no-answer-closeout-service",
+  "role": "validator",
+  "status": "DONE",
+  "timestamp": "2026-04-02T02:05:00+07:00",
+  "summary": "Closeout service passes local regression coverage for theme-empty and no-eligible runs.",
+  "checks": [
+    "test_run_closeout.py covers NO_ANSWER_CONTENT payload",
+    "test_run_closeout.py covers NO_ELIGIBLE_RECORDS payload",
+    "backend import succeeds with the new closeout path"
+  ],
+  "issues": [],
+  "ready_for_next_cp": true
+}

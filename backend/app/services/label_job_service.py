@@ -33,17 +33,32 @@ class LabelJobService:
         self._tasks: dict[str, asyncio.Task[None]] = {}
 
     async def ensure_job_for_run(self, run_id: str, *, auto_start: bool = False) -> dict[str, Any]:
+        should_closeout_no_eligible = False
         with SessionLocal() as session:
             run = session.get(PlanRun, run_id)
             if run is None:
                 raise ValueError("run not found")
             total_records = self.count_eligible_records(run_id, session=session)
             if total_records == 0:
-                run.answer_status = NO_ELIGIBLE_RECORDS_STATUS
-                run.answer_generated_at = None
-                session.add(run)
-                session.commit()
-                return self._build_no_eligible_summary(run_id)
+                if self._closeout_service is None:
+                    run.answer_status = NO_ELIGIBLE_RECORDS_STATUS
+                    run.answer_generated_at = None
+                    session.add(run)
+                    session.commit()
+                else:
+                    should_closeout_no_eligible = True
+        if should_closeout_no_eligible:
+            await self._closeout_service.ensure_no_answer_closeout_for_run(
+                run_id,
+                outcome_type=NO_ELIGIBLE_RECORDS_STATUS,
+                warning="No eligible records remained after pre-AI gating. Labeling was skipped.",
+            )
+            return self._build_no_eligible_summary(run_id)
+        with SessionLocal() as session:
+            run = session.get(PlanRun, run_id)
+            if run is None:
+                raise ValueError("run not found")
+            total_records = self.count_eligible_records(run_id, session=session)
             job = session.scalars(
                 select(LabelJob)
                 .where(

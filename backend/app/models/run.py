@@ -29,6 +29,7 @@ class PlanRun(Base):
     failure_class: Mapped[Optional[str]] = mapped_column(Text)
     answer_status: Mapped[Optional[str]] = mapped_column(Text)
     answer_generated_at: Mapped[Optional[str]] = mapped_column(Text)
+    answer_payload_json: Mapped[Optional[str]] = mapped_column(Text)
     started_at: Mapped[str] = mapped_column(
         Text,
         nullable=False,

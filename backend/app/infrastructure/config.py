@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     retrieval_min_accepted_per_path: int = 3
     retrieval_max_scanned_per_path: int = 60
     retrieval_max_query_variants: int = 2
+    goal_aware_exhaustion_enabled: bool = True
+    goal_aware_min_search_steps: int = 2
+    goal_aware_min_scanned_records: int = 120
     pre_ai_mode: str = "strict"
     judge_high_confidence_threshold: float = 0.75
     step_heartbeat_interval_sec: float = 10.0

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +11,11 @@ from sqlalchemy.orm import sessionmaker
 
 from app.infrastructure.config import Settings
 from app.models import Base
+from app.models.crawled_post import CrawledPost
+from app.models.plan import Plan, PlanStep
+from app.models.product_context import ProductContext
 from app.models.run import PlanRun
+from app.models.run import StepRun
 from app.services.run_closeout import RunCloseoutService
 
 
@@ -94,6 +99,14 @@ class RunCloseoutServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_marks_run_no_answer_when_theme_list_empty(self) -> None:
         with self.session_local() as session:
             session.add(
+                ProductContext(
+                    context_id="context-2",
+                    topic="shinhan vay tien mat",
+                    status="keywords_ready",
+                )
+            )
+            session.add(Plan(plan_id="plan-1", context_id="context-2", version=1, status="ready"))
+            session.add(
                 PlanRun(
                     run_id="run-2",
                     plan_id="plan-1",
@@ -132,11 +145,148 @@ class RunCloseoutServiceTests(unittest.IsolatedAsyncioTestCase):
             summary = await service.ensure_closeout_for_run("run-2")
 
         self.assertEqual(summary["answer_status"], "NO_ANSWER_CONTENT")
+        self.assertIsNotNone(summary["answer_payload"])
+        self.assertEqual(summary["answer_payload"]["outcome_type"], "NO_ANSWER_CONTENT")
         with self.session_local() as session:
             run = session.get(PlanRun, "run-2")
             assert run is not None
             self.assertEqual(run.answer_status, "NO_ANSWER_CONTENT")
             self.assertIsNone(run.answer_generated_at)
+            self.assertIsNotNone(run.answer_payload_json)
+
+    async def test_builds_no_eligible_records_payload(self) -> None:
+        with self.session_local() as session:
+            session.add(
+                ProductContext(
+                    context_id="context-3",
+                    topic="vay tiền mặt ở shin han",
+                    status="keywords_ready",
+                )
+            )
+            session.add(Plan(plan_id="plan-3", context_id="context-3", version=1, status="ready"))
+            session.add(
+                PlanStep(
+                    step_id="plan-3:step-1",
+                    plan_id="plan-3",
+                    plan_version=1,
+                    step_order=1,
+                    action_type="SEARCH_POSTS",
+                    read_or_write="READ",
+                    target="shinhan",
+                    estimated_count=80,
+                    estimated_duration_sec=60,
+                    risk_level="LOW",
+                    dependency_step_ids="[]",
+                )
+            )
+            session.add(
+                PlanRun(
+                    run_id="run-3",
+                    plan_id="plan-3",
+                    plan_version=1,
+                    grant_id="grant-3",
+                    status="DONE",
+                    completion_reason="NO_ELIGIBLE_RECORDS",
+                    failure_class=None,
+                    answer_status=None,
+                    answer_generated_at=None,
+                    answer_payload_json=None,
+                    started_at="2026-04-02T00:00:00+00:00",
+                    total_records=2,
+                )
+            )
+            session.add(
+                StepRun(
+                    step_run_id="step-run-3",
+                    run_id="run-3",
+                    step_id="plan-3:step-1",
+                    status="DONE",
+                    started_at="2026-04-02T00:00:00+00:00",
+                    ended_at="2026-04-02T00:02:00+00:00",
+                    actual_count=80,
+                    checkpoint=json.dumps(
+                        {
+                            "phase": "done",
+                            "step_id": "step-1",
+                            "query_attempts": [
+                                {
+                                    "query": "shinhan phi cao",
+                                    "collected_count": 80,
+                                    "accepted_count": 0,
+                                    "stop_reason": "zero_accepted_batches_exceeded",
+                                    "reason_cluster": "generic_weak",
+                                    "used_reformulation": True,
+                                }
+                            ],
+                            "batch_summaries": [],
+                        }
+                    ),
+                    checkpoint_json=None,
+                    retry_count=0,
+                )
+            )
+            session.add(
+                CrawledPost(
+                    post_id="post-1",
+                    run_id="run-3",
+                    step_run_id="step-run-3",
+                    group_id_hash="group-1",
+                    content="Shinhan vay nhanh inbox em",
+                    content_masked="Shinhan vay nhanh inbox em",
+                    record_type="POST",
+                    source_url="https://example.com/post-1",
+                    pre_ai_status="REJECTED",
+                    judge_decision="REJECTED",
+                    judge_relevance_score=0.12,
+                    judge_reason_codes_json=json.dumps(["commercial_noise", "seller_cta"]),
+                    judge_used_image_understanding=False,
+                    label_status="PENDING",
+                    is_excluded=False,
+                )
+            )
+            session.add(
+                CrawledPost(
+                    post_id="post-2",
+                    run_id="run-3",
+                    step_run_id="step-run-3",
+                    group_id_hash="group-2",
+                    content="Shinhan lãi suất sao vậy",
+                    content_masked="Shinhan lãi suất sao vậy",
+                    record_type="POST",
+                    source_url="https://example.com/post-2",
+                    pre_ai_status="REJECTED",
+                    judge_decision="REJECTED",
+                    judge_relevance_score=0.42,
+                    judge_reason_codes_json=json.dumps(["no_target_mention"]),
+                    judge_used_image_understanding=False,
+                    label_status="PENDING",
+                    is_excluded=False,
+                )
+            )
+            session.commit()
+
+        service = RunCloseoutService(FakeInsightService({"themes": []}), Settings())
+
+        with patch("app.services.run_closeout.SessionLocal", self.session_local):
+            summary = await service.ensure_no_answer_closeout_for_run(
+                "run-3",
+                outcome_type="NO_ELIGIBLE_RECORDS",
+                warning="No eligible records remained after pre-AI gating.",
+            )
+
+        self.assertEqual(summary["answer_status"], "NO_ELIGIBLE_RECORDS")
+        payload = summary["answer_payload"]
+        self.assertIsNotNone(payload)
+        self.assertEqual(payload["outcome_type"], "NO_ELIGIBLE_RECORDS")
+        self.assertEqual(payload["topic"], "vay tiền mặt ở shin han")
+        self.assertEqual(payload["attempted_queries"][0]["query"], "shinhan phi cao")
+        self.assertEqual(payload["dominant_reject_reasons"][0]["reason_code"], "commercial_noise")
+        with self.session_local() as session:
+            run = session.get(PlanRun, "run-3")
+            assert run is not None
+            self.assertEqual(run.answer_status, "NO_ELIGIBLE_RECORDS")
+            self.assertIsNotNone(run.answer_generated_at)
+            self.assertIsNotNone(run.answer_payload_json)
 
 
 if __name__ == "__main__":

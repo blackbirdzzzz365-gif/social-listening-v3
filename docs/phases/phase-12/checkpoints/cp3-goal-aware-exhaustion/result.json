@@ -1,0 +1,13 @@
+{
+  "cp": "cp3-goal-aware-exhaustion",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-04-02T02:05:00+07:00",
+  "summary": "Runner can now skip remaining pending tail steps when repeated weak zero-accept search paths prove the goal is exhausted.",
+  "artifacts": [
+    "backend/app/services/runner.py",
+    "backend/tests/test_runner_phase12.py"
+  ],
+  "issues": [],
+  "notes": ""
+}
