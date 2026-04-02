@@ -7,6 +7,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from sqlalchemy import func, select
@@ -28,8 +29,8 @@ from app.services.browser_run_admission import (
 from app.services.health_monitor import HealthMonitorService, utc_now_iso
 from app.services.label_job_service import LabelJobService, NO_ELIGIBLE_RECORDS_STATUS
 from app.services.planner import get_public_step_id
-from app.services.research_gating import ModelJudgeService, Phase8BatchHealthEvaluator
-from app.services.retrieval_quality import DeterministicRelevanceEngine, RetrievalProfileBuilder
+from app.services.research_gating import HardFilterResult, ModelJudgeService, Phase8BatchHealthEvaluator
+from app.services.retrieval_quality import DeterministicRelevanceEngine, RetrievalProfileBuilder, normalize_text
 from app.services.run_closeout import RunCloseoutService
 
 
@@ -106,6 +107,28 @@ class RunnerService:
         self._model_judge = ModelJudgeService(ai_client, settings)
         self._batch_evaluator = Phase8BatchHealthEvaluator(settings)
         self._active_step_tasks: dict[str, asyncio.Task[Any]] = {}
+        self._source_filter_group_terms = (
+            "vay tien",
+            "vay von",
+            "ho tro vay",
+            "tin dung",
+            "the chap",
+            "tra gop",
+            "dao han",
+            "rut tien",
+            "mo the",
+            "tai chinh",
+            "finance",
+        )
+        self._source_filter_discussion_terms = (
+            "review",
+            "hoi dap",
+            "kinh nghiem",
+            "phan hoi",
+            "so sanh",
+            "cong dong",
+            "khach hang",
+        )
 
     async def start_run(self, plan_id: str, grant_id: str) -> dict[str, Any]:
         run_id = f"run-{uuid4().hex[:10]}"
@@ -1289,6 +1312,7 @@ class RunnerService:
                             reaction_count=p.get("reaction_count", 0),
                             comment_count=p.get("comment_count", 0),
                             source_group_id=p.get("source_group_id"),
+                            source_group_name=p.get("source_group_name"),
                         )
                     )
                 processed = await self._process_candidates(
@@ -1377,6 +1401,8 @@ class RunnerService:
                     activity="crawl_comments",
                 )
                 all_comments.extend(comments)
+                for comment in comments:
+                    comment["source_group_name"] = post_ref.get("source_group_name")
                 processed = await self._process_candidates(
                     run_id=run_id,
                     step_run_id=step_run.step_run_id,
@@ -1658,6 +1684,7 @@ class RunnerService:
                             "post_id": post.get("post_id") or "",
                             "post_url": url,
                             "source_group_id": post.get("source_group_id") or "",
+                            "source_group_name": post.get("source_group_name") or "",
                             "query_text": post.get("query_text") or "",
                         }
                     )
@@ -1871,27 +1898,50 @@ class RunnerService:
                 raw["query_text"] = query_text
                 record_type = str(raw.get("record_type") or "POST")
                 parent_entry = parent_context.get(raw.get("parent_post_id") or "") or parent_context.get(raw.get("parent_post_url") or "")
+                source_filter = self._source_prefilter(
+                    raw=raw,
+                    query_family=query_family,
+                    query_text=query_text,
+                    profile=profile,
+                    validity_spec=validity_spec,
+                )
                 hard_filter = self._model_judge.hard_filter(
                     content=str(raw.get("content") or ""),
                     record_type=record_type,
                     validity_spec=validity_spec,
                 )
-                deterministic_score = self._relevance_engine.score(
-                    content=str(raw.get("content") or ""),
-                    retrieval_profile=profile,
-                    record_type=record_type,
-                    source_type=source_type,
-                    query_family=query_family,
-                    parent_text=(parent_entry or {}).get("content"),
-                    parent_status=(parent_entry or {}).get("status"),
-                )
-                if hard_filter.rejected:
+                if source_filter is not None:
+                    judge_result = self._model_judge.build_hard_reject_result(
+                        validity_spec=validity_spec,
+                        content_id=str(raw.get("post_id") or ""),
+                        filter_result=source_filter,
+                    )
+                    deterministic_score = RetrievalScore(
+                        status="REJECTED",
+                        score_total=0.0,
+                        reason=source_filter.reason_code,
+                        score_breakdown={"source_prefilter": 1.0},
+                        quality_flags=source_filter.quality_flags,
+                        cleaned_text=source_filter.cleaned_text,
+                        query_family=query_family,
+                    )
+                else:
+                    deterministic_score = self._relevance_engine.score(
+                        content=str(raw.get("content") or ""),
+                        retrieval_profile=profile,
+                        record_type=record_type,
+                        source_type=source_type,
+                        query_family=query_family,
+                        parent_text=(parent_entry or {}).get("content"),
+                        parent_status=(parent_entry or {}).get("status"),
+                    )
+                if source_filter is None and hard_filter.rejected:
                     judge_result = self._model_judge.build_hard_reject_result(
                         validity_spec=validity_spec,
                         content_id=str(raw.get("post_id") or ""),
                         filter_result=hard_filter,
                     )
-                else:
+                elif source_filter is None:
                     try:
                         judge_result = await self._model_judge.judge_text(
                             validity_spec=validity_spec,
@@ -2057,6 +2107,105 @@ class RunnerService:
             "stop_reason": stop_reason,
         }
 
+    def _source_prefilter(
+        self,
+        *,
+        raw: dict[str, Any],
+        query_family: str,
+        query_text: str,
+        profile: dict[str, Any] | None,
+        validity_spec: dict[str, Any] | None,
+    ) -> HardFilterResult | None:
+        if not self._source_filter_enabled(validity_spec):
+            return None
+
+        source_group_name = str(raw.get("source_group_name") or "").strip()
+        source_url = str(raw.get("source_url") or "").strip()
+        cleaned_text = str(raw.get("content") or "").strip()
+        normalized_group_name = normalize_text(source_group_name)
+
+        if self._is_broker_group_source(normalized_group_name, source_group_name):
+            return HardFilterResult(
+                rejected=True,
+                decision="REJECTED",
+                reason_code="source_prefilter_broker_group",
+                rationale="Source group looks like a broker or lead-gen community rather than organic user discussion.",
+                cleaned_text=cleaned_text,
+                quality_flags=["source_prefilter", "broker_group_source"],
+            )
+
+        if query_family == "brand" and self._is_official_brand_page_source(source_url, profile, query_text):
+            return HardFilterResult(
+                rejected=True,
+                decision="REJECTED",
+                reason_code="source_prefilter_official_brand_page",
+                rationale="Source URL looks like an official brand page post, not an end-user discussion source.",
+                cleaned_text=cleaned_text,
+                quality_flags=["source_prefilter", "official_brand_page_source"],
+            )
+
+        return None
+
+    def _source_filter_enabled(self, validity_spec: dict[str, Any] | None) -> bool:
+        validity_spec = validity_spec or {}
+        signal_text = normalize_text(
+            " ".join(
+                [
+                    " ".join(str(item) for item in validity_spec.get("target_author_types", [])),
+                    " ".join(str(item) for item in validity_spec.get("non_target_author_types", [])),
+                    " ".join(str(item) for item in validity_spec.get("hard_reject_signals", [])),
+                    " ".join(str(item) for item in validity_spec.get("target_signal_types", [])),
+                    str(validity_spec.get("research_objective") or ""),
+                ]
+            )
+        )
+        return any(
+            token in signal_text
+            for token in (
+                "consumer",
+                "borrower",
+                "end user",
+                "comparison",
+                "promotional",
+                "advertiser",
+                "representative",
+                "transactional",
+            )
+        )
+
+    def _is_broker_group_source(self, normalized_group_name: str, raw_group_name: str) -> bool:
+        if not normalized_group_name:
+            return False
+        discussion_hits = sum(1 for term in self._source_filter_discussion_terms if term in normalized_group_name)
+        broker_hits = sum(1 for term in self._source_filter_group_terms if term in normalized_group_name)
+        has_phone = bool(re.search(r"\d{7,}", raw_group_name))
+        if broker_hits >= 2:
+            return True
+        if broker_hits >= 1 and has_phone:
+            return True
+        if broker_hits >= 1 and discussion_hits == 0 and any(token in normalized_group_name for token in ("ho tro", "mien phi", "lai suat thap", "tu van")):
+            return True
+        return False
+
+    def _is_official_brand_page_source(
+        self,
+        source_url: str,
+        profile: dict[str, Any] | None,
+        query_text: str,
+    ) -> bool:
+        lowered_url = source_url.lower()
+        if not lowered_url or "/groups/" in lowered_url:
+            return False
+        if not any(marker in lowered_url for marker in ("/posts/", "/videos/", "/photos/")):
+            return False
+        anchors = [normalize_text(str(item)) for item in (profile or {}).get("anchors", [])]
+        anchor_terms = [anchor for anchor in anchors if anchor and len(anchor) >= 4]
+        path_text = normalize_text(" ".join(urlsplit(source_url).path.split("/")))
+        host_text = normalize_text(urlsplit(source_url).netloc)
+        if not any(anchor in path_text or anchor in host_text for anchor in anchor_terms):
+            return False
+        return True
+
     def _persist_scored_posts(
         self,
         *,
@@ -2183,6 +2332,7 @@ class RunnerService:
                         "post_id": post_id,
                         "post_url": raw.get("source_url"),
                         "source_group_id": raw.get("source_group_id"),
+                        "source_group_name": raw.get("source_group_name"),
                         "pre_ai_status": judge_result.decision,
                         "pre_ai_score": judge_result.relevance_score,
                         "judge_decision": judge_result.decision,
