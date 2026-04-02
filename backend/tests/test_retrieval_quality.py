@@ -106,6 +106,46 @@ class RetrievalProfileBuilderTests(unittest.TestCase):
         self.assertEqual(cluster, "promo_noise")
         self.assertTrue(any("review" in query.lower() or "bi lua" in query.lower() for query in reformulations))
 
+    def test_prefers_specific_topic_query_over_generic_brand_anchor(self) -> None:
+        builder = RetrievalProfileBuilder()
+        profile = builder.build(
+            topic="vay tien mat tai shinhan",
+            keyword_map={
+                "brand": ["Shinhan", "Vay tien mat Shinhan", "Shinhan Bank"],
+                "pain_points": ["lai suat vay cao"],
+                "comparison": ["Shinhan vs Vietcombank"],
+                "behavior": [],
+                "sentiment": [],
+            },
+        )
+
+        self.assertEqual(profile["query_families"][0]["query"], "vay tien mat tai shinhan")
+
+    def test_reformulations_keep_product_context_when_brand_is_generic(self) -> None:
+        builder = RetrievalProfileBuilder()
+        profile = builder.build(
+            topic="vay tien mat tai shinhan",
+            keyword_map={
+                "brand": ["Shinhan", "Vay tien mat Shinhan", "Shinhan Bank"],
+                "pain_points": ["phi cao", "lai suat cao"],
+                "comparison": ["Shinhan vs Vietcombank"],
+                "behavior": [],
+                "sentiment": [],
+            },
+        )
+
+        reformulations = builder.build_reformulations(
+            "Shinhan phi cao",
+            profile,
+            {"research_objective": "Tim so sanh vay tien mat Shinhan voi ngan hang khac va cac van de phi, lai."},
+            "cost_gap",
+            max_variants=2,
+        )
+
+        self.assertTrue(reformulations)
+        self.assertTrue(all("shinhan" in query.lower() for query in reformulations))
+        self.assertTrue(any("vay" in query.lower() for query in reformulations))
+
     def test_adds_image_bearing_queries_for_visual_topics(self) -> None:
         builder = RetrievalProfileBuilder()
         profile = builder.build(

@@ -143,7 +143,7 @@ class RetrievalProfileBuilder:
         anchors = dedupe_keep_order(brand_terms + [topic])
         related_terms = dedupe_keep_order(pain_terms + behavior_terms + comparison_terms + sentiment_terms)
         negative_terms = dedupe_keep_order(list(PROMO_TERMS))
-        base_query = anchors[0] if anchors else topic
+        base_query = self._select_anchor_for_reference(topic, anchors) if anchors else topic
 
         query_families = [
             {"intent": "brand", "query": base_query},
@@ -396,7 +396,34 @@ class RetrievalProfileBuilder:
     def _base_query(self, query: str, profile: dict[str, Any] | None) -> str:
         profile = profile or {}
         anchors = profile.get("anchors", [])
-        return str(anchors[0] if anchors else query).strip()
+        if isinstance(anchors, list) and anchors:
+            return self._select_anchor_for_reference(query, [str(item) for item in anchors])
+        return query.strip()
+
+    def _select_anchor_for_reference(self, reference: str, candidates: list[str]) -> str:
+        normalized_reference = normalize_text(reference)
+        reference_tokens = set(normalized_reference.split())
+        best_candidate = reference.strip()
+        best_score: tuple[int, int, int, int, int] | None = None
+
+        for candidate in dedupe_keep_order(candidates):
+            normalized_candidate = normalize_text(candidate)
+            if not normalized_candidate:
+                continue
+            candidate_tokens = normalized_candidate.split()
+            overlap = len(set(candidate_tokens) & reference_tokens)
+            score = (
+                int(normalized_candidate == normalized_reference),
+                int(bool(normalized_reference and normalized_reference in normalized_candidate)),
+                overlap,
+                int(len(candidate_tokens) > 1),
+                len(candidate_tokens),
+            )
+            if best_score is None or score > best_score:
+                best_score = score
+                best_candidate = candidate
+
+        return best_candidate.strip() or reference.strip()
 
     def _is_image_bearing_text(self, value: str) -> bool:
         normalized = normalize_text(value)
