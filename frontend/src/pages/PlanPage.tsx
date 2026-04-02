@@ -7,6 +7,7 @@ import {
   TextInput,
 } from "@mantine/core";
 import { useEffect, useState } from "react";
+import { RuntimeReadiness, RuntimeReadinessPanel } from "../components/research/RuntimeReadinessPanel";
 import { ActionBar } from "../components/ui/ActionBar";
 import { KeyValueRow } from "../components/ui/KeyValueRow";
 import { PageHeader } from "../components/ui/PageHeader";
@@ -33,6 +34,7 @@ type PlanResponse = {
   estimated_total_duration_sec?: number;
   warnings?: string[];
   diff_summary?: string | null;
+  runtime_readiness?: RuntimeReadiness | null;
 };
 
 type PlanPageProps = {
@@ -47,12 +49,26 @@ export function PlanPage({ initialContextId = "", onPlanReady }: PlanPageProps) 
   const [isGenerating, setIsGenerating] = useState(false);
   const [isRefining, setIsRefining] = useState(false);
   const [error, setError] = useState("");
+  const [runtimeReadiness, setRuntimeReadiness] = useState<RuntimeReadiness | null>(null);
+
+  const refreshRuntimeReadiness = async () => {
+    try {
+      const payload = await fetchJson<RuntimeReadiness>("/api/browser/status");
+      setRuntimeReadiness(payload);
+    } catch {
+      setRuntimeReadiness(null);
+    }
+  };
 
   useEffect(() => {
     setContextId(initialContextId);
     setPlan(null);
     setError("");
   }, [initialContextId]);
+
+  useEffect(() => {
+    void refreshRuntimeReadiness();
+  }, []);
 
   const generate = async () => {
     setIsGenerating(true);
@@ -64,9 +80,11 @@ export function PlanPage({ initialContextId = "", onPlanReady }: PlanPageProps) 
         body: JSON.stringify({ context_id: contextId.trim() }),
       });
       setPlan(payload);
+      setRuntimeReadiness(payload.runtime_readiness ?? null);
       onPlanReady?.(payload.plan_id);
     } catch (requestError) {
       setPlan(null);
+      void refreshRuntimeReadiness();
       setError(requestError instanceof Error ? requestError.message : "Generate plan failed");
     } finally {
       setIsGenerating(false);
@@ -84,8 +102,10 @@ export function PlanPage({ initialContextId = "", onPlanReady }: PlanPageProps) 
         body: JSON.stringify({ instruction }),
       });
       setPlan(payload);
+      setRuntimeReadiness(payload.runtime_readiness ?? null);
       onPlanReady?.(payload.plan_id);
     } catch (requestError) {
+      void refreshRuntimeReadiness();
       setError(requestError instanceof Error ? requestError.message : "Refine plan failed");
     } finally {
       setIsRefining(false);
@@ -100,16 +120,24 @@ export function PlanPage({ initialContextId = "", onPlanReady }: PlanPageProps) 
         title="Ordered steps with write action highlights."
       />
       <Stack gap="sm">
+        <RuntimeReadinessPanel readiness={runtimeReadiness} />
         <TextInput
           onChange={(event) => setContextId(event.target.value)}
           placeholder="Enter context_id from keyword step"
           value={contextId}
         />
         <ActionBar>
-          <Button onClick={generate} disabled={isGenerating || isRefining || !contextId.trim()}>
+          <Button
+            onClick={generate}
+            disabled={isGenerating || isRefining || !contextId.trim() || runtimeReadiness?.runnable === false}
+          >
             {isGenerating ? "Generating..." : "Generate Plan"}
           </Button>
-          <Button onClick={refine} disabled={isGenerating || isRefining || !plan} variant="light">
+          <Button
+            onClick={refine}
+            disabled={isGenerating || isRefining || !plan || runtimeReadiness?.runnable === false}
+            variant="light"
+          >
             {isRefining ? "Refining..." : "Refine Plan"}
           </Button>
         </ActionBar>

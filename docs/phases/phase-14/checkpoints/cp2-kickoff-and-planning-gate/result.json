@@ -1,0 +1,1 @@
+{"status":"done","notes":["Topic analysis, clarification submit, plan generation, and plan refinement now short-circuit with 409 when runtime is not runnable."]}

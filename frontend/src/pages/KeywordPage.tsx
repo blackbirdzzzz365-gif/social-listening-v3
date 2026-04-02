@@ -7,7 +7,8 @@ import {
   TextInput,
   Textarea,
 } from "@mantine/core";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { RuntimeReadiness, RuntimeReadinessPanel } from "../components/research/RuntimeReadinessPanel";
 import { ActionBar } from "../components/ui/ActionBar";
 import { KeyValueRow } from "../components/ui/KeyValueRow";
 import { PageHeader } from "../components/ui/PageHeader";
@@ -38,6 +39,7 @@ type SessionResponse = {
   clarifying_questions: string[] | null;
   keywords: KeywordMap | null;
   clarification_history: { question: string; answer: string }[];
+  runtime_readiness?: RuntimeReadiness | null;
 };
 
 type KeywordPageProps = {
@@ -58,6 +60,20 @@ export function KeywordPage({ onContextReady }: KeywordPageProps) {
   const [isSubmittingClarification, setIsSubmittingClarification] = useState(false);
   const [error, setError] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
+  const [runtimeReadiness, setRuntimeReadiness] = useState<RuntimeReadiness | null>(null);
+
+  const refreshRuntimeReadiness = async () => {
+    try {
+      const payload = await fetchJson<RuntimeReadiness>("/api/browser/status");
+      setRuntimeReadiness(payload);
+    } catch {
+      setRuntimeReadiness(null);
+    }
+  };
+
+  useEffect(() => {
+    void refreshRuntimeReadiness();
+  }, []);
 
   const applySession = (payload: SessionResponse) => {
     setTopic(payload.topic);
@@ -68,6 +84,7 @@ export function KeywordPage({ onContextReady }: KeywordPageProps) {
     setAnswers((payload.clarifying_questions ?? []).map(() => ""));
     setKeywords(payload.keywords ?? emptyKeywords);
     setClarificationHistory(payload.clarification_history ?? []);
+    setRuntimeReadiness(payload.runtime_readiness ?? null);
     onContextReady?.(payload.context_id);
   };
 
@@ -95,6 +112,7 @@ export function KeywordPage({ onContextReady }: KeywordPageProps) {
       setKeywords(emptyKeywords);
       setClarificationHistory([]);
       setStatusMessage("");
+      void refreshRuntimeReadiness();
       setError(requestError instanceof Error ? requestError.message : "Analyze topic failed");
     } finally {
       setIsSubmitting(false);
@@ -119,6 +137,7 @@ export function KeywordPage({ onContextReady }: KeywordPageProps) {
       );
     } catch (requestError) {
       setStatusMessage("");
+      void refreshRuntimeReadiness();
       setError(requestError instanceof Error ? requestError.message : "Load context failed");
     } finally {
       setIsLoadingContext(false);
@@ -146,6 +165,7 @@ export function KeywordPage({ onContextReady }: KeywordPageProps) {
           : "Keywords ready."
       );
     } catch (requestError) {
+      void refreshRuntimeReadiness();
       setError(requestError instanceof Error ? requestError.message : "Clarification submit failed");
     } finally {
       setIsSubmittingClarification(false);
@@ -153,7 +173,11 @@ export function KeywordPage({ onContextReady }: KeywordPageProps) {
   };
 
   const isClarificationDisabled =
-    isSubmittingClarification || !contextId || answers.length !== questions.length || answers.some((answer) => !answer.trim());
+    isSubmittingClarification ||
+    !contextId ||
+    runtimeReadiness?.runnable === false ||
+    answers.length !== questions.length ||
+    answers.some((answer) => !answer.trim());
 
   return (
     <PageSection>
@@ -163,12 +187,13 @@ export function KeywordPage({ onContextReady }: KeywordPageProps) {
         title="Topic to keyword groups."
       />
       <Stack gap="sm">
+        <RuntimeReadinessPanel readiness={runtimeReadiness} />
         <TextInput
           onChange={(event) => setTopic(event.target.value)}
           value={topic}
         />
         <ActionBar>
-          <Button onClick={submit} disabled={isSubmitting || isLoadingContext}>
+          <Button onClick={submit} disabled={isSubmitting || isLoadingContext || runtimeReadiness?.runnable === false}>
             {isSubmitting ? "Analyzing..." : "Analyze Topic"}
           </Button>
         </ActionBar>

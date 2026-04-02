@@ -1,0 +1,23 @@
+{
+  "pack_id": "phase-14-core",
+  "description": "Default production case pack for Phase 14. Run 1 case at a time while runtime is not runnable.",
+  "defaults": {
+    "base_url": "https://social-listening-v3.blackbirdzzzz.art",
+    "ssh_target": "chiasegpu-vm",
+    "container": "social-listening-v3",
+    "report_root": "reports/production",
+    "interval_sec": 120,
+    "approval_mode": "read-only"
+  },
+  "cases": [
+    {
+      "id": "phase14-fe-credit-runtime-readiness-gate",
+      "mode": "live_internal_api_flow",
+      "browser_precondition_mode": "observe_only",
+      "topic": "Suy nghi cua khach hang ve vay nhanh tien mat qua FE Credit",
+      "phase": "phase-14",
+      "focus": "FE Credit vay nhanh tien mat",
+      "expectation": "Neu browser runtime khong runnable, topic kickoff phai bi chan som truoc planner cost va tra ve readiness truth ro nghia."
+    }
+  ]
+}

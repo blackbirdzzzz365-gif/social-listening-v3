@@ -1,0 +1,4 @@
+- create session blocked early
+- clarifications blocked early
+- create/refine plan blocked early
+- read-only fetches remain available

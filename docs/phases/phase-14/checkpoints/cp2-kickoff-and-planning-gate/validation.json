@@ -1,0 +1,1 @@
+{"validated":true,"checks":["create session blocked early","create plan blocked early","read-only get session/plan left available","planner call short-circuit covered by tests"]}

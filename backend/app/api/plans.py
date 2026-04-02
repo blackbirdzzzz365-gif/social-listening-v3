@@ -14,10 +14,15 @@ from app.schemas.plans import (
     PlanCreateRequest,
     PlanRefineRequest,
     PlanResponse,
+    RuntimeReadinessSummary,
     SessionCreateRequest,
     SessionResponse,
 )
 from app.services.planner import PlannerProviderUnavailableError
+from app.services.runtime_readiness import (
+    build_runtime_block_message,
+    build_runtime_readiness_payload,
+)
 
 router = APIRouter(prefix="/api", tags=["plans"])
 SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills"
@@ -46,7 +51,25 @@ async def _enrich_with_explanations(payload: dict, http_request: Request) -> dic
     return payload
 
 
-def _to_session_response(result) -> SessionResponse:
+def _runtime_readiness(http_request: Request) -> RuntimeReadinessSummary | None:
+    health_monitor = getattr(http_request.app.state, "health_monitor", None)
+    if health_monitor is None:
+        return None
+    state = health_monitor.get_browser_runtime_state()
+    return RuntimeReadinessSummary(**build_runtime_readiness_payload(state))
+
+
+def _require_runtime_ready(http_request: Request, *, stage: str) -> RuntimeReadinessSummary | None:
+    health_monitor = getattr(http_request.app.state, "health_monitor", None)
+    if health_monitor is None:
+        return None
+    state = health_monitor.get_browser_runtime_state()
+    if not state.runnable:
+        raise HTTPException(status_code=409, detail=build_runtime_block_message(state, stage=stage))
+    return RuntimeReadinessSummary(**build_runtime_readiness_payload(state))
+
+
+def _to_session_response(result, runtime_readiness: RuntimeReadinessSummary | None = None) -> SessionResponse:
     return SessionResponse(
         context_id=result.context_id,
         topic=result.topic,
@@ -57,11 +80,13 @@ def _to_session_response(result) -> SessionResponse:
         validity_spec=result.validity_spec,
         clarification_history=result.clarification_history,
         planning_meta=result.planning_meta,
+        runtime_readiness=runtime_readiness,
     )
 
 
 @router.post("/sessions", response_model=SessionResponse)
 async def create_session(request: SessionCreateRequest, http_request: Request) -> SessionResponse:
+    runtime_readiness = _require_runtime_ready(http_request, stage="topic_analysis")
     try:
         result = await http_request.app.state.planner_service.analyze_topic(
             request.topic,
@@ -72,7 +97,7 @@ async def create_session(request: SessionCreateRequest, http_request: Request) -
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return _to_session_response(result)
+    return _to_session_response(result, runtime_readiness=runtime_readiness)
 
 
 @router.get("/sessions/{context_id}", response_model=SessionResponse)
@@ -86,7 +111,7 @@ async def get_session(context_id: str, http_request: Request) -> SessionResponse
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PlannerProviderUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return _to_session_response(result)
+    return _to_session_response(result, runtime_readiness=_runtime_readiness(http_request))
 
 
 @router.post("/sessions/{context_id}/clarifications", response_model=SessionResponse)
@@ -95,6 +120,7 @@ async def submit_clarifications(
     request: ClarificationAnswerRequest,
     http_request: Request,
 ) -> SessionResponse:
+    runtime_readiness = _require_runtime_ready(http_request, stage="clarification_submit")
     try:
         result = await http_request.app.state.planner_service.submit_clarifications(
             context_id,
@@ -105,7 +131,7 @@ async def submit_clarifications(
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _to_session_response(result)
+    return _to_session_response(result, runtime_readiness=runtime_readiness)
 
 
 @router.patch("/sessions/{context_id}/keywords", response_model=SessionResponse)
@@ -122,11 +148,12 @@ async def update_keywords(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    return _to_session_response(result)
+    return _to_session_response(result, runtime_readiness=_runtime_readiness(http_request))
 
 
 @router.post("/plans", response_model=PlanResponse)
 async def create_plan(request: PlanCreateRequest, http_request: Request) -> PlanResponse:
+    runtime_readiness = _require_runtime_ready(http_request, stage="plan_generation")
     try:
         payload = await http_request.app.state.planner_service.generate_plan(
             request.context_id,
@@ -137,11 +164,13 @@ async def create_plan(request: PlanCreateRequest, http_request: Request) -> Plan
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    payload["runtime_readiness"] = None if runtime_readiness is None else runtime_readiness.model_dump()
     return PlanResponse(**payload)
 
 
 @router.patch("/plans/{plan_id}", response_model=PlanResponse)
 async def refine_plan(plan_id: str, request: PlanRefineRequest, http_request: Request) -> PlanResponse:
+    runtime_readiness = _require_runtime_ready(http_request, stage="plan_refinement")
     try:
         payload = await http_request.app.state.planner_service.refine_plan(
             plan_id,
@@ -153,6 +182,7 @@ async def refine_plan(plan_id: str, request: PlanRefineRequest, http_request: Re
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    payload["runtime_readiness"] = None if runtime_readiness is None else runtime_readiness.model_dump()
     return PlanResponse(**payload)
 
 
@@ -163,6 +193,8 @@ async def get_plan(plan_id: str, http_request: Request) -> PlanResponse:
         payload = await _enrich_with_explanations(payload, http_request)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    runtime_readiness = _runtime_readiness(http_request)
+    payload["runtime_readiness"] = None if runtime_readiness is None else runtime_readiness.model_dump()
     return PlanResponse(**payload)
 
 

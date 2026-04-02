@@ -28,6 +28,17 @@ class ClarificationAnswerRequest(BaseModel):
     answers: list[str] = Field(default_factory=list)
 
 
+class RuntimeReadinessSummary(BaseModel):
+    runnable: bool
+    session_status: str
+    health_status: str
+    action_required: str | None = None
+    block_reason: str | None = None
+    last_checked: str | None = None
+    summary: str
+    next_steps: list[str] = Field(default_factory=list)
+
+
 class SessionResponse(BaseModel):
     context_id: str
     topic: str
@@ -38,6 +49,7 @@ class SessionResponse(BaseModel):
     validity_spec: dict[str, Any] | None = None
     clarification_history: list[ClarificationTurn] = Field(default_factory=list)
     planning_meta: dict[str, Any] | None = None
+    runtime_readiness: RuntimeReadinessSummary | None = None
 
 
 class KeywordUpdateRequest(BaseModel):
@@ -83,6 +95,7 @@ class PlanResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     diff_summary: str | None = None
     generation_meta: dict[str, Any] | None = None
+    runtime_readiness: RuntimeReadinessSummary | None = None
 
 
 class ApprovalRequest(BaseModel):

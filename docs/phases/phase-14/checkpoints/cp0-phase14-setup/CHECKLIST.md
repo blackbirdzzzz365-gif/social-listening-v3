@@ -1,0 +1,3 @@
+- Phase 14 docs package exists
+- `.phase.json` points to `phase-14`
+- case pack exists

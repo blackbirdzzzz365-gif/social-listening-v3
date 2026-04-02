@@ -1,0 +1,1 @@
+{"validated":true,"checks":["runtime_readiness.py created","browser status returns summary and next_steps","session and plan schemas include runtime_readiness"]}

@@ -1,0 +1,3 @@
+- keyword screen shows readiness truth
+- plan screen shows readiness truth
+- action required and next steps are visible

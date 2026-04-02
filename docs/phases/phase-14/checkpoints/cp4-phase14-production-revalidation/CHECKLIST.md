@@ -1,0 +1,3 @@
+- production deploy completed
+- live kickoff case rerun
+- verdict written with earlier-stop proof

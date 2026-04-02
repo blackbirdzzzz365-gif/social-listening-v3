@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 
 from app.schemas.browser import BrowserSetupResponse, BrowserStatus
+from app.services.runtime_readiness import build_runtime_readiness_payload
 
 router = APIRouter(prefix="/api/browser", tags=["browser"])
 
@@ -33,16 +34,10 @@ class BrowserSetupHub:
 @router.get("/status", response_model=BrowserStatus)
 async def browser_status(request: Request) -> BrowserStatus:
     state = request.app.state.health_monitor.get_browser_runtime_state()
-    return BrowserStatus(
-        session_status=state.session_status,
-        account_id_hash=state.account_id_hash,
-        health_status=state.health_status,
-        cooldown_until=state.cooldown_until,
-        last_checked=state.last_checked,
-        runnable=state.runnable,
-        action_required=state.action_required,
-        block_reason=state.block_reason,
-    )
+    payload = build_runtime_readiness_payload(state)
+    payload["account_id_hash"] = state.account_id_hash
+    payload["cooldown_until"] = state.cooldown_until
+    return BrowserStatus(**payload)
 
 
 @router.post("/setup", response_model=BrowserSetupResponse)

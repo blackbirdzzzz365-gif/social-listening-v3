@@ -1,0 +1,3 @@
+- shared payload helper exists
+- browser status returns it
+- session/plan schemas support it
