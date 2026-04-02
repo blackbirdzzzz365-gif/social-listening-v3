@@ -397,9 +397,11 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
                   ) : null}
                   {run.answer_payload.summary ? <Text size="sm">{run.answer_payload.summary}</Text> : null}
                   {(run.answer_payload as { operator_state?: Record<string, unknown> }).operator_state ? (
-                    <Code block className="sl-code-block">
-                      {JSON.stringify((run.answer_payload as { operator_state?: Record<string, unknown> }).operator_state, null, 2)}
-                    </Code>
+                    <LogFrame maxHeight={180}>
+                      <Code block className="sl-code-block">
+                        {JSON.stringify((run.answer_payload as { operator_state?: Record<string, unknown> }).operator_state, null, 2)}
+                      </Code>
+                    </LogFrame>
                   ) : null}
                   {run.answer_payload.evidence_stats ? (
                     <LogFrame maxHeight={180}>
