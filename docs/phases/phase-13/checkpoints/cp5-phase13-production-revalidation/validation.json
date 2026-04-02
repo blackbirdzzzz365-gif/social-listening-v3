@@ -1,13 +1,17 @@
 {
   "cp": "cp5-phase13-production-revalidation",
   "role": "validator",
-  "status": "PENDING",
-  "timestamp": "2026-04-02T12:23:19+07:00",
-  "summary": "Local gate is green. Production deployment and live proof remain outstanding.",
+  "status": "PARTIAL",
+  "timestamp": "2026-04-02T12:49:17+07:00",
+  "summary": "Production deploy succeeded and expired-session admission was validated live. Full checkpoint closure still requires one healthy-session control rerun after operator re-authentication.",
   "checks": [
-    "Compile, tests, alembic, backend import, and frontend build all pass locally.",
-    "Case pack for expired-session plus healthy-session control is ready."
+    "GitHub build workflow 23885730503 completed successfully for SHA a1601c5.",
+    "GitHub deploy workflow 23885802718 completed successfully for SHA a1601c5.",
+    "Production container is running image ghcr.io/blackbirdzzzz365-gif/social-listening-v3:sha-a1601c5d011f64a937b6ffbc2b8af65fbacf4e50.",
+    "Run run-0b85c20e4b ended as DONE / REAUTH_REQUIRED before step-1 started."
   ],
-  "issues": [],
+  "issues": [
+    "No valid Facebook session is currently available on production for the healthy control-case rerun."
+  ],
   "ready_for_next_cp": false
 }

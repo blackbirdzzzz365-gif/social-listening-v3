@@ -1,13 +1,17 @@
 {
   "cp": "cp5-phase13-production-revalidation",
   "role": "implementer",
-  "status": "PENDING",
-  "timestamp": "2026-04-02T12:23:19+07:00",
-  "summary": "Production revalidation is the only remaining checkpoint. Local implementation and validation are complete; next step is deploy plus expired-session/control-case live proof.",
+  "status": "PARTIAL",
+  "timestamp": "2026-04-02T12:49:17+07:00",
+  "summary": "Phase 13 was deployed to production and expired-session behavior was proven live. Healthy control-case proof remains blocked until Facebook is reconnected on production.",
   "artifacts": [
     "docs/production/case-packs/phase-13-core.json",
-    "docs/phases/phase-13/candidate-summary.md"
+    "docs/phases/phase-13/candidate-summary.md",
+    "docs/phases/phase-13/analysis/checkpoint-verdict-20260402-1249.md",
+    "reports/production/run-0b85c20e4b/final_report.md"
   ],
-  "issues": [],
-  "notes": "Target proof: expired session yields REAUTH_REQUIRED before step-1; valid session control continues normal run flow."
+  "issues": [
+    "Production Facebook session is currently expired, so a valid-session control case could not be completed without manual operator re-authentication."
+  ],
+  "notes": "Expired-session proof is live and successful. The remaining gap is environment setup for a healthy control rerun."
 }

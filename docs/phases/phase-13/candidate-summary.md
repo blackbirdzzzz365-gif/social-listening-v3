@@ -32,7 +32,7 @@
 | CP2 | DONE | `runner.py`, `run_closeout.py`, `test_runner_phase13.py` | Browser-backed runs are blocked preflight and end with `REAUTH_REQUIRED` instead of fake step failures |
 | CP3 | DONE | `runner.py`, `run_closeout.py`, `browser_agent.py` | Mid-step auth expiry now propagates into truthful health degradation and terminal run outcome |
 | CP4 | DONE | `api/browser.py`, `schemas/browser.py`, `SetupPage.tsx`, `MonitorPage.tsx` | API/UI expose runnable state, action required, block reason, and operator-state payload |
-| CP5 | READY_FOR_PROD | case pack + checkpoint docs | Local validation is complete; remaining work is deploy and live revalidation |
+| CP5 | PARTIAL | deploy workflows + `run-0b85c20e4b` production proof | Expired-session gate is proven on production; valid-session control is blocked until Facebook is reconnected |
 
 ## Validation
 - Tests/build:
@@ -42,16 +42,17 @@
   - `PYTHONPATH=. /Users/nguyenquocthong/project/social-listening-v3/.venv/bin/python -c "import app.main"`
   - `cd frontend && npm ci && npm run build`
 - Production-like smoke:
-  - not run yet
+  - deploy SHA `a1601c5` to production succeeded
+  - run `run-0b85c20e4b` proved expired-session preflight gate on production
 - Known skips:
-  - CP5 production deploy and expired-session live proof
+  - valid-session control case could not run because production Facebook session is currently expired and unattended re-login timed out
 
 ## Risks And Open Questions
 - Live production may still contain external session drift cases not reproducible in local fake agents.
-- CP5 still needs real expired-session proof plus valid-session control to confirm no regression against healthy runs.
+- Phase 13 still needs one valid-session control rerun after manual Facebook reconnect to fully close CP5.
 
 ## Recommended Decision
-- `continue-to-production`
+- `rerun-observation-after-reauth`
 
 ## If Merged
 - Expected production checks:
