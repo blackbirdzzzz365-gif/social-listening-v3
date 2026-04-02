@@ -1,0 +1,14 @@
+{
+  "cp": "cp0-phase13-setup",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-04-02T02:20:00+07:00",
+  "summary": "Phase 13 docs package, case pack, and checkpoint workspace are initialized in a dedicated worktree.",
+  "artifacts": [
+    "docs/phases/phase-13/README.md",
+    "docs/phases/phase-13/phase-manifest.md",
+    "docs/production/case-packs/phase-13-core.json"
+  ],
+  "issues": [],
+  "notes": ""
+}

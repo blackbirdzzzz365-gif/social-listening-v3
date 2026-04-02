@@ -121,6 +121,30 @@ def write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def validate_browser_precondition(case: dict, browser_status: dict) -> None:
+    mode = str(case.get("browser_precondition_mode") or "require_valid").strip().lower()
+    session_status = str(browser_status.get("session_status") or "UNKNOWN")
+    runnable = bool(browser_status.get("runnable"))
+
+    if mode == "observe_only":
+        return
+    if mode == "require_valid":
+        if session_status != "VALID" or not runnable:
+            raise RuntimeError(
+                f"Browser session is not valid for case {case['id']}. "
+                f"session_status={session_status}, runnable={runnable}"
+            )
+        return
+    if mode == "require_non_runnable":
+        if runnable:
+            raise RuntimeError(
+                f"Browser session is still runnable for case {case['id']}. "
+                f"session_status={session_status}, runnable={runnable}"
+            )
+        return
+    raise RuntimeError(f"Unsupported browser_precondition_mode={mode!r} for case {case['id']}")
+
+
 def run_live_case(case: dict, defaults: dict, dry_run: bool) -> dict:
     base_url = (case.get("base_url") or defaults["base_url"]).rstrip("/")
     ssh_target = case.get("ssh_target") or defaults["ssh_target"]
@@ -141,10 +165,7 @@ def run_live_case(case: dict, defaults: dict, dry_run: bool) -> dict:
         }
 
     browser_status = request("GET", f"{base_url}/api/browser/status")
-    if browser_status.get("session_status") != "VALID":
-        raise RuntimeError(
-            f"Browser session is not valid for case {case['id']}. Current session_status={browser_status.get('session_status')}"
-        )
+    validate_browser_precondition(case, browser_status)
 
     session = request("POST", f"{base_url}/api/sessions", {"topic": case["topic"]})
     session = ensure_keywords_ready(base_url, session, case)
@@ -176,6 +197,7 @@ def run_live_case(case: dict, defaults: dict, dry_run: bool) -> dict:
             "phase": case.get("phase"),
             "expectation": case.get("expectation"),
             "success_signals": case.get("success_signals") or [],
+            "browser_status_at_start": browser_status,
             "started_at": utc_now(),
         },
     )
@@ -188,6 +210,7 @@ def run_live_case(case: dict, defaults: dict, dry_run: bool) -> dict:
             "plan": plan,
             "grant": grant,
             "run": run,
+            "browser_status_at_start": browser_status,
         },
     )
 

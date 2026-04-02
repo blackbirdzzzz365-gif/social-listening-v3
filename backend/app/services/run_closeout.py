@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import func, select
 
 from app.models.crawled_post import CrawledPost
+from app.models.health import AccountHealthState
 from app.models.plan import Plan, PlanStep
 from app.models.product_context import ProductContext
 from app.infrastructure.config import Settings
@@ -58,6 +59,32 @@ class RunCloseoutService:
                 return self.get_summary(run_id)
             payload = self._build_no_answer_payload(session, run_id, outcome_type=outcome_type, warning=warning)
             run.answer_status = outcome_type
+            run.answer_generated_at = utc_now_iso()
+            run.answer_payload_json = json.dumps(payload, ensure_ascii=False)
+            session.add(run)
+            session.commit()
+        return self.get_summary(run_id)
+
+    async def ensure_reauth_required_for_run(
+        self,
+        run_id: str,
+        *,
+        warning: str | None = None,
+        failed_step_id: str | None = None,
+        failure_stage: str | None = None,
+    ) -> dict[str, Any]:
+        with SessionLocal() as session:
+            run = session.get(PlanRun, run_id)
+            if run is None:
+                raise ValueError("run not found")
+            payload = self._build_reauth_payload(
+                session,
+                run_id,
+                warning=warning,
+                failed_step_id=failed_step_id,
+                failure_stage=failure_stage,
+            )
+            run.answer_status = "REAUTH_REQUIRED"
             run.answer_generated_at = utc_now_iso()
             run.answer_payload_json = json.dumps(payload, ensure_ascii=False)
             session.add(run)
@@ -364,3 +391,60 @@ class RunCloseoutService:
             seen.add(action)
             deduped.append(action)
         return deduped[:3]
+
+    def _build_reauth_payload(
+        self,
+        session: Any,
+        run_id: str,
+        *,
+        warning: str | None = None,
+        failed_step_id: str | None = None,
+        failure_stage: str | None = None,
+    ) -> dict[str, Any]:
+        run = session.get(PlanRun, run_id)
+        if run is None:
+            raise ValueError("run not found")
+        plan = session.get(Plan, run.plan_id)
+        context = session.get(ProductContext, plan.context_id) if plan is not None else None
+        account_health = session.get(AccountHealthState, 1)
+
+        session_status = (account_health.session_status if account_health is not None else None) or "NOT_SETUP"
+        health_status = (account_health.status if account_health is not None else None) or "HEALTHY"
+        action_required = "REAUTH_REQUIRED" if session_status == "EXPIRED" else "CONNECT_FACEBOOK"
+        block_reason = "session_expired" if session_status == "EXPIRED" else "session_not_setup"
+        if health_status == "HEALTHY" and session_status == "EXPIRED":
+            health_status = "CAUTION"
+        stage_phrase = "before browser execution started" if failure_stage == "preflight" else "during browser execution"
+        step_text = f" at {failed_step_id}" if failed_step_id else ""
+
+        return {
+            "outcome_type": "REAUTH_REQUIRED",
+            "title": "Facebook session requires re-authentication",
+            "summary": (
+                f"The run for '{context.topic if context is not None else run.run_id}' could not continue{step_text} "
+                f"because the Facebook session was not runnable {stage_phrase}."
+            ),
+            "warning": warning or "Reconnect Facebook before retrying this browser-backed run.",
+            "topic": context.topic if context is not None else None,
+            "evidence_stats": {
+                "total_records": int(run.total_records or 0),
+                "accepted_count": 0,
+                "rejected_count": 0,
+                "uncertain_count": 0,
+            },
+            "operator_state": {
+                "session_status": session_status,
+                "health_status": health_status,
+                "action_required": action_required,
+                "block_reason": block_reason,
+                "last_checked": None if account_health is None else account_health.last_checked,
+                "cooldown_until": None if account_health is None else account_health.cooldown_until,
+            },
+            "failed_step_id": failed_step_id,
+            "failure_stage": failure_stage,
+            "recommended_next_actions": [
+                "Open the Facebook setup flow and reconnect the account.",
+                "Confirm browser status returns session_status=VALID and runnable=true.",
+                "Retry the run after re-authentication is complete.",
+            ],
+        }

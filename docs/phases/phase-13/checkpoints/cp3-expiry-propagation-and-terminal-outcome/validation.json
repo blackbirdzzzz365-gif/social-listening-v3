@@ -1,0 +1,13 @@
+{
+  "cp": "cp3-expiry-propagation-and-terminal-outcome",
+  "role": "validator",
+  "status": "DONE",
+  "timestamp": "2026-04-02T12:23:19+07:00",
+  "summary": "Runtime auth-expiry propagation and terminal-outcome handling are validated locally.",
+  "checks": [
+    "Mid-step SessionExpiredException now marks session expired and closes run with REAUTH_REQUIRED.",
+    "Closeout payload contains operator_state and recommended next actions for re-auth."
+  ],
+  "issues": [],
+  "ready_for_next_cp": true
+}

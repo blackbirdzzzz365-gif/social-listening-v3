@@ -1,0 +1,16 @@
+{
+  "cp": "cp3-expiry-propagation-and-terminal-outcome",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-04-02T12:23:19+07:00",
+  "summary": "Runtime auth expiry is now propagated into health truth and a deterministic REAUTH_REQUIRED closeout payload instead of surfacing as a misleading step crash.",
+  "artifacts": [
+    "backend/app/infra/browser_agent.py",
+    "backend/app/services/runner.py",
+    "backend/app/services/run_closeout.py",
+    "backend/tests/test_runner_phase13.py",
+    "backend/tests/test_run_closeout.py"
+  ],
+  "issues": [],
+  "notes": "Both preflight expiry and mid-step expiry now converge on the same operator-facing outcome contract."
+}

@@ -1,0 +1,40 @@
+{
+  "pack_id": "phase-13-core",
+  "description": "Default production case pack for Phase 13. Run 1-2 cases at a time.",
+  "defaults": {
+    "base_url": "https://social-listening-v3.blackbirdzzzz.art",
+    "ssh_target": "chiasegpu-vm",
+    "container": "social-listening-v3",
+    "report_root": "reports/production",
+    "interval_sec": 120,
+    "approval_mode": "read-only"
+  },
+  "cases": [
+    {
+      "id": "phase13-fe-credit-reauth-gate",
+      "mode": "live_api_flow",
+      "browser_precondition_mode": "observe_only",
+      "topic": "Suy nghi cua khach hang ve vay nhanh tien mat qua FE Credit",
+      "phase": "phase-13",
+      "focus": "FE Credit vay nhanh tien mat",
+      "audience": "Tap trung vao feedback that ve trust, complaint, phi, lai suat, va trai nghiem vay tien mat qua FE Credit tai Viet Nam.",
+      "comparison_policy": "Ghi nhan so sanh voi Home Credit, Shinhan Finance, hoac don vi cho vay khac neu giup ly giai trust, phi, hoac trai nghiem vay, nhung uu tien feedback that ve FE Credit.",
+      "timeframe": "Tap trung 12 thang gan nhat.",
+      "default_answer": "Tap trung vao feedback that ve trust, complaint, phi, lai suat, va trai nghiem vay tien mat qua FE Credit tai Viet Nam.",
+      "expectation": "Neu session Facebook da het han, run phai bi chan som voi outcome `REAUTH_REQUIRED` thay vi vao `step-1` roi fail generic."
+    },
+    {
+      "id": "phase13-shinhan-valid-session-control",
+      "mode": "live_api_flow",
+      "browser_precondition_mode": "require_valid",
+      "topic": "vay tiền mặt ở shin han",
+      "phase": "phase-13",
+      "focus": "Shinhan cash loan customer experience and interest rates",
+      "audience": "Tap trung vao trai nghiem that, muc lai suat, dieu kien vay, va so sanh voi ngan hang khac cua khach hang da vay hoac da nop ho so.",
+      "comparison_policy": "Ghi nhan so sanh voi Agribank, ACB, Vietcombank, Techcombank, BIDV, MB Bank, va Sacombank neu giup ly giai trai nghiem vay cua Shinhan.",
+      "timeframe": "Tap trung 12 thang gan nhat.",
+      "default_answer": "Tap trung vao trai nghiem that, muc lai suat, dieu kien vay, va so sanh voi ngan hang khac cua khach hang da vay hoac da nop ho so.",
+      "expectation": "Neu session hop le, run control case van phai di theo business path thong thuong va khong regress Phase 12 no-answer closeout."
+    }
+  ]
+}

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -27,6 +28,58 @@ def parse_dt(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value)
 
 
+@dataclass
+class BrowserRuntimeState:
+    session_status: str
+    account_id_hash: str | None
+    health_status: str
+    cooldown_until: str | None
+    last_checked: str | None
+    runnable: bool
+    action_required: str | None
+    block_reason: str | None
+
+
+def _normalize_health_state(state: AccountHealthState) -> bool:
+    changed = False
+    if state.session_status == "EXPIRED" and state.status == "HEALTHY":
+        state.status = "CAUTION"
+        changed = True
+    return changed
+
+
+def _derive_browser_runtime_state(state: AccountHealthState) -> BrowserRuntimeState:
+    session_status = state.session_status or "NOT_SETUP"
+    health_status = state.status or "HEALTHY"
+    runnable = True
+    action_required: str | None = None
+    block_reason: str | None = None
+
+    if session_status == "NOT_SETUP":
+        runnable = False
+        action_required = "CONNECT_FACEBOOK"
+        block_reason = "session_not_setup"
+    elif session_status == "EXPIRED":
+        runnable = False
+        action_required = "REAUTH_REQUIRED"
+        block_reason = "session_expired"
+    elif health_status == "BLOCKED":
+        runnable = False
+        action_required = "WAIT_COOLDOWN" if state.cooldown_until else "MANUAL_RESET_REQUIRED"
+        block_reason = "account_blocked"
+
+    return BrowserRuntimeState(
+        session_status=session_status,
+        account_id_hash=state.account_id_hash,
+        health_status=health_status,
+        cooldown_until=state.cooldown_until,
+        last_checked=state.last_checked,
+        runnable=runnable,
+        action_required=action_required,
+        block_reason=block_reason,
+    )
+
+
 def ensure_health_state(session: Session) -> AccountHealthState:
     state = session.get(AccountHealthState, 1)
     if state is None:
@@ -36,6 +89,11 @@ def ensure_health_state(session: Session) -> AccountHealthState:
             session_status="NOT_SETUP",
             updated_at=utc_now_iso(),
         )
+        session.add(state)
+        session.commit()
+        session.refresh(state)
+    elif _normalize_health_state(state):
+        state.updated_at = utc_now_iso()
         session.add(state)
         session.commit()
         session.refresh(state)
@@ -88,6 +146,8 @@ class HealthMonitorService:
                 cooldown_until = now + timedelta(hours=1)
             elif signal.signal_type == "SESSION_EXPIRED":
                 state.session_status = "EXPIRED"
+                if state.status == "HEALTHY":
+                    state.status = "CAUTION"
             elif signal.signal_type == "MANUAL_RESET":
                 state.status = "HEALTHY"
                 cooldown_until = None
@@ -133,6 +193,16 @@ class HealthMonitorService:
                 session.expunge(log)
             return state, log
 
+    def get_browser_runtime_state(self) -> BrowserRuntimeState:
+        with SessionLocal() as session:
+            state = ensure_health_state(session)
+            runtime_state = _derive_browser_runtime_state(state)
+            session.expunge(state)
+            return runtime_state
+
+    def is_browser_runnable(self) -> bool:
+        return self.get_browser_runtime_state().runnable
+
     def is_write_allowed(self) -> bool:
         state, _ = self.get_status_snapshot()
         cooldown_until = parse_dt(state.cooldown_until)
@@ -154,6 +224,10 @@ class HealthMonitorService:
             session.refresh(state)
             session.expunge(state)
             return state
+
+    async def mark_session_expired(self, raw_signal: dict | None = None) -> BrowserRuntimeState:
+        await self.process_signal(HealthSignal(signal_type="SESSION_EXPIRED", raw_signal=raw_signal or {}))
+        return self.get_browser_runtime_state()
 
     async def reset(self, confirm: bool) -> AccountHealthState:
         if not confirm:

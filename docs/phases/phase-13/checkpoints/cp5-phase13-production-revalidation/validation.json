@@ -1,0 +1,13 @@
+{
+  "cp": "cp5-phase13-production-revalidation",
+  "role": "validator",
+  "status": "PENDING",
+  "timestamp": "2026-04-02T12:23:19+07:00",
+  "summary": "Local gate is green. Production deployment and live proof remain outstanding.",
+  "checks": [
+    "Compile, tests, alembic, backend import, and frontend build all pass locally.",
+    "Case pack for expired-session plus healthy-session control is ready."
+  ],
+  "issues": [],
+  "ready_for_next_cp": false
+}

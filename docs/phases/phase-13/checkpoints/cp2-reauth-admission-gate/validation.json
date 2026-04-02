@@ -1,0 +1,13 @@
+{
+  "cp": "cp2-reauth-admission-gate",
+  "role": "validator",
+  "status": "DONE",
+  "timestamp": "2026-04-02T12:23:19+07:00",
+  "summary": "Preflight gate and re-auth admission semantics are validated locally.",
+  "checks": [
+    "Expired preflight run ends as DONE / REAUTH_REQUIRED before any step starts.",
+    "Legacy fake browser agents without assert_session_valid remain compatible in tests."
+  ],
+  "issues": [],
+  "ready_for_next_cp": true
+}

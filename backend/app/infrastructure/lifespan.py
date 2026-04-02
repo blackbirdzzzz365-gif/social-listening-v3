@@ -57,6 +57,7 @@ async def lifespan_factory(app: FastAPI, settings: Settings) -> AsyncIterator[No
         app.state.ai_client,
         app.state.label_job_service,
         browser_admission_service=app.state.browser_run_admission_service,
+        closeout_service=app.state.run_closeout_service,
         settings=settings,
     )
     app.state.browser_setup_task = None

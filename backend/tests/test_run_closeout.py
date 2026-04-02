@@ -288,6 +288,61 @@ class RunCloseoutServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(run.answer_generated_at)
             self.assertIsNotNone(run.answer_payload_json)
 
+    async def test_builds_reauth_required_payload(self) -> None:
+        with self.session_local() as session:
+            session.add(
+                ProductContext(
+                    context_id="context-4",
+                    topic="fe credit",
+                    status="keywords_ready",
+                )
+            )
+            session.add(Plan(plan_id="plan-4", context_id="context-4", version=1, status="ready"))
+            session.add(
+                PlanRun(
+                    run_id="run-4",
+                    plan_id="plan-4",
+                    plan_version=1,
+                    grant_id="grant-4",
+                    status="DONE",
+                    completion_reason="REAUTH_REQUIRED",
+                    failure_class="AUTH_SESSION_EXPIRED",
+                    answer_status=None,
+                    answer_generated_at=None,
+                    answer_payload_json=None,
+                    started_at="2026-04-02T00:00:00+00:00",
+                    total_records=0,
+                )
+            )
+            from app.models.health import AccountHealthState
+
+            session.add(
+                AccountHealthState(
+                    id=1,
+                    status="CAUTION",
+                    session_status="EXPIRED",
+                    account_id_hash="account",
+                    last_checked="2026-04-02T00:10:00+00:00",
+                )
+            )
+            session.commit()
+
+        service = RunCloseoutService(FakeInsightService({"themes": []}), Settings())
+
+        with patch("app.services.run_closeout.SessionLocal", self.session_local):
+            summary = await service.ensure_reauth_required_for_run(
+                "run-4",
+                warning="Facebook session expired",
+                failed_step_id="step-1",
+                failure_stage="preflight",
+            )
+
+        self.assertEqual(summary["answer_status"], "REAUTH_REQUIRED")
+        payload = summary["answer_payload"]
+        self.assertEqual(payload["outcome_type"], "REAUTH_REQUIRED")
+        self.assertEqual(payload["operator_state"]["session_status"], "EXPIRED")
+        self.assertEqual(payload["recommended_next_actions"][0], "Open the Facebook setup flow and reconnect the account.")
+
 
 if __name__ == "__main__":
     unittest.main()

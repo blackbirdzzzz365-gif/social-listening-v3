@@ -1,0 +1,13 @@
+{
+  "cp": "cp1-session-truth-contract",
+  "role": "validator",
+  "status": "DONE",
+  "timestamp": "2026-04-02T12:23:19+07:00",
+  "summary": "Truthful health/session invariants are validated locally.",
+  "checks": [
+    "SESSION_EXPIRED now degrades HEALTHY to CAUTION and marks browser runtime as non-runnable.",
+    "Browser status schema exposes runnable/action_required/block_reason fields."
+  ],
+  "issues": [],
+  "ready_for_next_cp": true
+}

@@ -1,0 +1,10 @@
+{
+  "cp": "cp0-phase13-setup",
+  "role": "validator",
+  "status": "DONE",
+  "timestamp": "2026-04-02T02:20:00+07:00",
+  "summary": "Phase 13 scaffolding exists in the clean worktree and matches the locked direction.",
+  "checks": [],
+  "issues": [],
+  "ready_for_next_cp": true
+}

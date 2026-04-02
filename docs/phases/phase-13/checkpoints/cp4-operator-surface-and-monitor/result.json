@@ -1,0 +1,16 @@
+{
+  "cp": "cp4-operator-surface-and-monitor",
+  "role": "implementer",
+  "status": "DONE",
+  "timestamp": "2026-04-02T12:23:19+07:00",
+  "summary": "Browser status API, setup surface, and monitor now expose truthful session state, runnable status, action required, and block reason.",
+  "artifacts": [
+    "backend/app/api/browser.py",
+    "backend/app/schemas/browser.py",
+    "frontend/src/pages/SetupPage.tsx",
+    "frontend/src/pages/MonitorPage.tsx",
+    "frontend/src/theme/status.ts"
+  ],
+  "issues": [],
+  "notes": "Operator state from REAUTH_REQUIRED closeout is also visible in run monitor output."
+}

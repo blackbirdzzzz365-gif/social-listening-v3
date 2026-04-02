@@ -210,9 +210,6 @@ class BrowserAgent:
 
     async def assert_session_valid(self) -> None:
         if not await self.is_logged_in():
-            await self._event_queue.put(
-                HealthSignal(signal_type="SESSION_EXPIRED", raw_signal={"source": "browser_agent"})
-            )
             raise SessionExpiredException("Facebook session expired")
 
     async def emit_signal(self, signal_type: str, raw_signal: dict[str, Any] | None = None) -> None:

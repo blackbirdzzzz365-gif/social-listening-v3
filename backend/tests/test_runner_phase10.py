@@ -23,6 +23,32 @@ class FakeHealthMonitor:
     def is_write_allowed(self) -> bool:
         return True
 
+    def get_browser_runtime_state(self):
+        class State:
+            session_status = "VALID"
+            account_id_hash = "account"
+            health_status = "HEALTHY"
+            cooldown_until = None
+            last_checked = None
+            runnable = True
+            action_required = None
+            block_reason = None
+
+        return State()
+
+    async def mark_session_expired(self, raw_signal=None):
+        class State:
+            session_status = "EXPIRED"
+            account_id_hash = "account"
+            health_status = "CAUTION"
+            cooldown_until = None
+            last_checked = None
+            runnable = False
+            action_required = "REAUTH_REQUIRED"
+            block_reason = "session_expired"
+
+        return State()
+
 
 class ControlledBrowserAgent:
     def __init__(self) -> None:

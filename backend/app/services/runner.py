@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 
 from app.domain.action_registry import get_action_spec
 from app.infra.ai_client import AIClient
-from app.infra.browser_agent import BrowserAgent, BrowserStartupError, RawPost
+from app.infra.browser_agent import BrowserAgent, BrowserStartupError, RawPost, SessionExpiredException
 from app.infrastructure.database import SessionLocal
 from app.models.approval import ApprovalGrant
 from app.models.crawled_post import CrawledPost
@@ -30,6 +30,7 @@ from app.services.label_job_service import LabelJobService, NO_ELIGIBLE_RECORDS_
 from app.services.planner import get_public_step_id
 from app.services.research_gating import ModelJudgeService, Phase8BatchHealthEvaluator
 from app.services.retrieval_quality import DeterministicRelevanceEngine, RetrievalProfileBuilder
+from app.services.run_closeout import RunCloseoutService
 
 
 @dataclass
@@ -54,6 +55,25 @@ class StepActionTimeout(RuntimeError):
         self.last_progress = dict(last_progress or {})
 
 
+class BrowserActionRequiredError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        action_required: str,
+        block_reason: str,
+        browser_status: dict[str, Any],
+        failure_class: str,
+        failure_stage: str,
+    ) -> None:
+        super().__init__(message)
+        self.action_required = action_required
+        self.block_reason = block_reason
+        self.browser_status = dict(browser_status)
+        self.failure_class = failure_class
+        self.failure_stage = failure_stage
+
+
 class RunnerService:
     def __init__(
         self,
@@ -62,11 +82,13 @@ class RunnerService:
         ai_client: AIClient,
         label_job_service: LabelJobService | None = None,
         browser_admission_service: BrowserRunAdmissionService | None = None,
+        closeout_service: RunCloseoutService | None = None,
         settings: Any | None = None,
     ) -> None:
         self._browser_agent = browser_agent
         self._health_monitor = health_monitor
         self._label_job_service = label_job_service
+        self._closeout_service = closeout_service
         self._settings = settings
         self._browser_admission = browser_admission_service or BrowserRunAdmissionService()
         self._tasks: dict[str, asyncio.Task[None]] = {}
@@ -299,6 +321,7 @@ class RunnerService:
                     if control.stop_requested:
                         await self._finalize_cancelled_run(run_id, current_step_run_id)
                     return
+                await self._ensure_browser_preflight(run_id)
             while True:
                 await control.resume_event.wait()
                 if control.stop_requested:
@@ -378,6 +401,8 @@ class RunnerService:
                     ),
                 },
             )
+        except BrowserActionRequiredError as exc:
+            await self._finalize_auth_required_run(run_id, exc, current_step_run_id)
         except RunCancellationRequested:
             await self._finalize_cancelled_run(run_id, current_step_run_id)
         except Exception as exc:
@@ -520,6 +545,54 @@ class RunnerService:
             except BrowserRunAdmissionCancelled:
                 return False
 
+    async def _ensure_browser_preflight(self, run_id: str) -> None:
+        browser_state = self._health_monitor.get_browser_runtime_state()
+        if not browser_state.runnable:
+            raise BrowserActionRequiredError(
+                "Facebook session requires re-authentication before the run can start",
+                action_required=browser_state.action_required or "REAUTH_REQUIRED",
+                block_reason=browser_state.block_reason or "session_not_runnable",
+                browser_status={
+                    "session_status": browser_state.session_status,
+                    "health_status": browser_state.health_status,
+                    "runnable": browser_state.runnable,
+                    "action_required": browser_state.action_required,
+                    "block_reason": browser_state.block_reason,
+                    "last_checked": browser_state.last_checked,
+                },
+                failure_class="AUTH_SESSION_EXPIRED"
+                if browser_state.session_status == "EXPIRED"
+                else "AUTH_SESSION_UNAVAILABLE",
+                failure_stage="preflight",
+            )
+        assert_session_valid = getattr(self._browser_agent, "assert_session_valid", None)
+        if not callable(assert_session_valid):
+            return
+        try:
+            await assert_session_valid()
+        except SessionExpiredException as exc:
+            runtime_state = await self._health_monitor.mark_session_expired(
+                {
+                    "source": "runner_preflight",
+                    "run_id": run_id,
+                }
+            )
+            raise BrowserActionRequiredError(
+                str(exc),
+                action_required=runtime_state.action_required or "REAUTH_REQUIRED",
+                block_reason=runtime_state.block_reason or "session_expired",
+                browser_status={
+                    "session_status": runtime_state.session_status,
+                    "health_status": runtime_state.health_status,
+                    "runnable": runtime_state.runnable,
+                    "action_required": runtime_state.action_required,
+                    "block_reason": runtime_state.block_reason,
+                    "last_checked": runtime_state.last_checked,
+                },
+                failure_class="AUTH_SESSION_EXPIRED",
+                failure_stage="preflight",
+            ) from exc
+
     async def _mark_step_done(self, run_id: str, step_run_id: str, result: dict[str, Any]) -> None:
         exhaustion_summary: dict[str, Any] | None = None
         with SessionLocal() as session:
@@ -546,6 +619,106 @@ class RunnerService:
                 "step_run_id": step_run_id,
                 "actual_count": result.get("actual_count"),
                 "goal_aware_exhaustion": exhaustion_summary,
+            },
+        )
+
+    async def _finalize_auth_required_run(
+        self,
+        run_id: str,
+        exc: BrowserActionRequiredError,
+        current_step_run_id: str | None,
+    ) -> None:
+        now = utc_now_iso()
+        answer_payload: dict[str, Any] | None = None
+        if self._closeout_service is not None:
+            summary = await self._closeout_service.ensure_reauth_required_for_run(
+                run_id,
+                warning=str(exc),
+                failed_step_id=None if current_step_run_id is None else self._step_id_for_step_run(current_step_run_id),
+                failure_stage=exc.failure_stage,
+            )
+            answer_payload = summary.get("answer_payload")
+
+        with SessionLocal() as session:
+            run = session.get(PlanRun, run_id)
+            if run is None:
+                raise ValueError("run not found")
+            run.status = "DONE"
+            run.completion_reason = "REAUTH_REQUIRED"
+            run.failure_class = exc.failure_class
+            run.answer_status = "REAUTH_REQUIRED"
+            run.answer_generated_at = run.answer_generated_at or now
+            if answer_payload is None and run.answer_payload_json:
+                answer_payload = json.loads(run.answer_payload_json)
+            elif answer_payload is None:
+                answer_payload = {
+                    "outcome_type": "REAUTH_REQUIRED",
+                    "title": "Facebook session requires re-authentication",
+                    "summary": str(exc),
+                    "operator_state": exc.browser_status,
+                    "recommended_next_actions": [
+                        "Open the Facebook setup flow and reconnect the account.",
+                        "Retry the run after browser status is valid again.",
+                    ],
+                }
+                run.answer_payload_json = json.dumps(answer_payload, ensure_ascii=False)
+
+            step_runs = session.scalars(select(StepRun).where(StepRun.run_id == run_id)).all()
+            for step_run in step_runs:
+                checkpoint = self._load_checkpoint(step_run)
+                checkpoint["step_id"] = get_public_step_id(step_run.step_id)
+                if current_step_run_id is not None and step_run.step_run_id == current_step_run_id:
+                    step_run.status = "FAILED"
+                    step_run.error_message = str(exc)
+                    step_run.ended_at = now
+                    checkpoint["phase"] = "failed"
+                    checkpoint["failed_at"] = now
+                    checkpoint["failure_class"] = exc.failure_class
+                    checkpoint["action_required"] = exc.action_required
+                    checkpoint["block_reason"] = exc.block_reason
+                    checkpoint["browser_status"] = exc.browser_status
+                elif step_run.status == "PENDING":
+                    step_run.status = "SKIPPED"
+                    step_run.error_message = "skipped after re-auth-required outcome"
+                    checkpoint["phase"] = "skipped"
+                    checkpoint["skip_reason"] = "reauth_required"
+                    checkpoint["skipped_at"] = now
+                    checkpoint["action_required"] = exc.action_required
+                    checkpoint["block_reason"] = exc.block_reason
+                    checkpoint["browser_status"] = exc.browser_status
+                serialized = json.dumps(checkpoint)
+                step_run.checkpoint = serialized
+                step_run.checkpoint_json = serialized
+                session.add(step_run)
+
+            run.ended_at = now
+            run.total_records = self._count_run_records(session, run_id)
+            session.add(run)
+            session.commit()
+
+        if current_step_run_id is not None:
+            await self._emit(
+                run_id,
+                "step_failed",
+                {
+                    "run_id": run_id,
+                    "error": str(exc),
+                    "step_run_id": current_step_run_id,
+                    "failure_class": exc.failure_class,
+                    "action_required": exc.action_required,
+                },
+            )
+        await self._emit(
+            run_id,
+            "run_done",
+            {
+                "run_id": run_id,
+                "status": "DONE_REAUTH_REQUIRED",
+                "completion_reason": "REAUTH_REQUIRED",
+                "failure_class": exc.failure_class,
+                "answer_status": "REAUTH_REQUIRED",
+                "action_required": exc.action_required,
+                "browser_status": exc.browser_status,
             },
         )
 
@@ -823,6 +996,30 @@ class RunnerService:
                 if done:
                     try:
                         return task.result()
+                    except SessionExpiredException as exc:
+                        runtime_state = await self._health_monitor.mark_session_expired(
+                            {
+                                "source": "runner_step",
+                                "run_id": run_id,
+                                "step_id": get_public_step_id(step.step_id),
+                                "action_type": step.action_type,
+                            }
+                        )
+                        raise BrowserActionRequiredError(
+                            str(exc),
+                            action_required=runtime_state.action_required or "REAUTH_REQUIRED",
+                            block_reason=runtime_state.block_reason or "session_expired",
+                            browser_status={
+                                "session_status": runtime_state.session_status,
+                                "health_status": runtime_state.health_status,
+                                "runnable": runtime_state.runnable,
+                                "action_required": runtime_state.action_required,
+                                "block_reason": runtime_state.block_reason,
+                                "last_checked": runtime_state.last_checked,
+                            },
+                            failure_class="AUTH_SESSION_EXPIRED",
+                            failure_stage="step",
+                        ) from exc
                     except asyncio.CancelledError as exc:
                         if control.stop_requested:
                             raise RunCancellationRequested(f"{step.action_type} cancelled") from exc
@@ -1396,6 +1593,13 @@ class RunnerService:
             return json.dumps(checkpoint), (collected_count or None)
         checkpoint["progress"] = progress
         return json.dumps(checkpoint), None
+
+    def _step_id_for_step_run(self, step_run_id: str) -> str | None:
+        with SessionLocal() as session:
+            step_run = session.get(StepRun, step_run_id)
+            if step_run is None:
+                return None
+            return get_public_step_id(step_run.step_id)
 
     def _normalize_query_key(self, query: str) -> str:
         return re.sub(r"\s+", " ", (query or "").strip().lower())

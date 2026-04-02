@@ -59,6 +59,17 @@ type RunResponse = {
   steps: StepRun[];
 };
 
+type BrowserStatusResponse = {
+  session_status: string;
+  account_id_hash: string | null;
+  health_status: string;
+  cooldown_until: string | null;
+  last_checked?: string | null;
+  runnable: boolean;
+  action_required?: string | null;
+  block_reason?: string | null;
+};
+
 type LabelSummaryResponse = {
   run_id: string;
   label_job_id: string | null;
@@ -90,6 +101,7 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
   const [labelStatusMessage, setLabelStatusMessage] = useState("");
   const [isLabelLoading, setIsLabelLoading] = useState(false);
   const [isStartingLabeling, setIsStartingLabeling] = useState(false);
+  const [browserStatus, setBrowserStatus] = useState<BrowserStatusResponse | null>(null);
   const sourceRef = useRef<EventSource | null>(null);
 
   const refreshRun = async (targetRunId = runId) => {
@@ -100,6 +112,15 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
       void refreshLabelSummary(targetRunId);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Refresh run failed");
+    }
+  };
+
+  const refreshBrowserStatus = async () => {
+    try {
+      const payload = await fetchJson<BrowserStatusResponse>("/api/browser/status");
+      setBrowserStatus(payload);
+    } catch {
+      setBrowserStatus(null);
     }
   };
 
@@ -128,6 +149,14 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
       sourceRef.current?.close();
       sourceRef.current = null;
     };
+  }, []);
+
+  useEffect(() => {
+    void refreshBrowserStatus();
+    const handle = window.setInterval(() => {
+      void refreshBrowserStatus();
+    }, 10000);
+    return () => window.clearInterval(handle);
   }, []);
 
   useEffect(() => {
@@ -213,6 +242,7 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
     };
     sourceRef.current = source;
     await refreshRun(normalizedRunId);
+    await refreshBrowserStatus();
   };
 
   const controlRun = async (action: "pause" | "resume" | "stop") => {
@@ -308,6 +338,29 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
         {runId ? <KeyValueRow label="run_id" mono value={runId} /> : null}
         <StatusBadge label={`Stream ${streamStatus}`} status={streamStatus} />
         {statusMessage ? <Text size="sm">monitor: {statusMessage}</Text> : null}
+        {browserStatus ? (
+          <Paper p="sm" radius="md" withBorder>
+            <Stack gap="xs">
+              <Text fw={700} size="sm">
+                Browser session truth
+              </Text>
+              <Stack gap={4}>
+                <StatusBadge label={`Session ${browserStatus.session_status}`} status={browserStatus.session_status} />
+                <StatusBadge label={`Health ${browserStatus.health_status}`} status={browserStatus.health_status} />
+                <StatusBadge
+                  label={`Runnable ${browserStatus.runnable ? "READY" : "BLOCKED"}`}
+                  status={browserStatus.runnable ? "READY" : "BLOCKED"}
+                />
+                {browserStatus.action_required ? (
+                  <StatusBadge label={`Action ${browserStatus.action_required}`} status={browserStatus.action_required} />
+                ) : null}
+              </Stack>
+              {browserStatus.last_checked ? <KeyValueRow label="last checked" value={browserStatus.last_checked} /> : null}
+              {browserStatus.block_reason ? <KeyValueRow label="block reason" value={browserStatus.block_reason} /> : null}
+              {browserStatus.cooldown_until ? <KeyValueRow label="cooldown until" value={browserStatus.cooldown_until} /> : null}
+            </Stack>
+          </Paper>
+        ) : null}
         {run ? (
           <Stack gap="sm">
             <StatusBadge label={`Run ${run.status}`} status={run.status} />
@@ -334,6 +387,11 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
                     <StatusBadge status={run.answer_payload.outcome_type} />
                   ) : null}
                   {run.answer_payload.summary ? <Text size="sm">{run.answer_payload.summary}</Text> : null}
+                  {(run.answer_payload as { operator_state?: Record<string, unknown> }).operator_state ? (
+                    <Code block className="sl-code-block">
+                      {JSON.stringify((run.answer_payload as { operator_state?: Record<string, unknown> }).operator_state, null, 2)}
+                    </Code>
+                  ) : null}
                   {run.answer_payload.evidence_stats ? (
                     <Code block className="sl-code-block">
                       {JSON.stringify(run.answer_payload.evidence_stats, null, 2)}

@@ -1,0 +1,13 @@
+{
+  "cp": "cp5-phase13-production-revalidation",
+  "role": "implementer",
+  "status": "PENDING",
+  "timestamp": "2026-04-02T12:23:19+07:00",
+  "summary": "Production revalidation is the only remaining checkpoint. Local implementation and validation are complete; next step is deploy plus expired-session/control-case live proof.",
+  "artifacts": [
+    "docs/production/case-packs/phase-13-core.json",
+    "docs/phases/phase-13/candidate-summary.md"
+  ],
+  "issues": [],
+  "notes": "Target proof: expired session yields REAUTH_REQUIRED before step-1; valid session control continues normal run flow."
+}

@@ -13,6 +13,10 @@ type BrowserStatus = {
   account_id_hash: string | null;
   health_status: "HEALTHY" | "CAUTION" | "BLOCKED";
   cooldown_until: string | null;
+  last_checked: string | null;
+  runnable: boolean;
+  action_required: string | null;
+  block_reason: string | null;
 };
 
 const initialStatus: BrowserStatus = {
@@ -20,6 +24,10 @@ const initialStatus: BrowserStatus = {
   account_id_hash: null,
   health_status: "HEALTHY",
   cooldown_until: null,
+  last_checked: null,
+  runnable: false,
+  action_required: "CONNECT_FACEBOOK",
+  block_reason: "session_not_setup",
 };
 
 export function SetupPage() {
@@ -40,12 +48,17 @@ export function SetupPage() {
         const payload = (await response.json()) as BrowserStatus;
         setStatus(payload);
         if (payload.session_status === "VALID") {
-          setMessage("Da ket noi — san sang.");
+          setMessage(payload.runnable ? "Da ket noi — san sang." : "Session hop le nhung dang bi block boi health runtime.");
           setIsConnecting(false);
           return;
         }
         if (payload.session_status === "EXPIRED") {
-          setMessage("Session het han. Hay ket noi lai Facebook.");
+          setMessage("Session het han. Hay ket noi lai Facebook truoc khi chay run moi.");
+          setIsConnecting(false);
+          return;
+        }
+        if (payload.action_required === "CONNECT_FACEBOOK") {
+          setMessage("Chua co session Facebook. Hay ket noi tai day truoc.");
           setIsConnecting(false);
           return;
         }
@@ -111,8 +124,12 @@ export function SetupPage() {
         <Group gap="xs" wrap="wrap">
           <StatusBadge label={`Session ${status.session_status}`} status={status.session_status} />
           <StatusBadge label={`Health ${status.health_status}`} status={status.health_status} />
+          <StatusBadge label={`Runnable ${status.runnable ? "READY" : "BLOCKED"}`} status={status.runnable ? "READY" : "BLOCKED"} />
+          {status.action_required ? <StatusBadge label={`Action ${status.action_required}`} status={status.action_required} /> : null}
         </Group>
         <Text size="sm">{message}</Text>
+        {status.last_checked ? <KeyValueRow label="Last checked" value={status.last_checked} /> : null}
+        {status.block_reason ? <KeyValueRow label="Block reason" value={status.block_reason} /> : null}
         {status.cooldown_until ? (
           <KeyValueRow label="Cooldown until" mono value={status.cooldown_until} />
         ) : null}
