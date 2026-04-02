@@ -20,7 +20,7 @@
 | CP1 | done | `runtime_readiness.py`, schema changes | Shared readiness contract |
 | CP2 | done | `backend/app/api/plans.py`, `backend/tests/test_plans_phase14.py` | Planner-heavy actions short-circuit before model cost |
 | CP3 | done | `frontend/src/components/research/RuntimeReadinessPanel.tsx` | Operator sees readiness truth on keyword and plan screens |
-| CP4 | pending | — | Production revalidation |
+| CP4 | done | `docs/phases/phase-14/analysis/checkpoint-verdict-20260402-1440.md` | Production revalidation proved earlier stop |
 
 ## Validation
 - Tests/build:
@@ -29,11 +29,16 @@
   - `cd backend && PYTHONPATH=. /Users/nguyenquocthong/project/social-listening-v3/.venv/bin/python -c "import app.main"`
   - `cd frontend && npm ci && npm run build`
 - Production-like smoke: pending deploy
+- Production-like smoke:
+  - production image build `23889473341`
+  - deploy `23889572138`
+  - live kickoff probe returned `409` before planner cost
 - Known skips:
-  - no live production rerun yet
+  - valid-session control case still blocked by expired production Facebook session
 
 ## Risks And Open Questions
 - Production rerun may not create a run record anymore if kickoff is blocked early; audit artifact must explain that explicitly.
+- Phase 14 proves earlier stop, but does not itself restore runtime availability or produce insights while Facebook session stays expired.
 
 ## Recommended Decision
 - `merge-and-deploy`

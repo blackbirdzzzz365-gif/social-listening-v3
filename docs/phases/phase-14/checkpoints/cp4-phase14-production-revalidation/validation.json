@@ -1,1 +1,1 @@
-{"validated":false,"checks":[]}
+{"validated":true,"checks":["production image updated to sha-1f389b7749e7fbb47daee92822a755326cc09469","browser status exposed EXPIRED runtime truth","session kickoff returned 409 before planner cost","product_context count unchanged during blocked kickoff"]}
