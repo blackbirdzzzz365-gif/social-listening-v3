@@ -13,6 +13,7 @@ class RunStartRequest(BaseModel):
 class StepRunSchema(BaseModel):
     step_run_id: str
     step_id: str
+    step_order: int
     action_type: str
     status: str
     started_at: str | None = None

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
+from urllib.parse import urlparse
 
 try:
     import anthropic
@@ -74,7 +75,7 @@ class AIClient:
         self._provider_configs = {
             "default": ProviderConfig(
                 slot="default",
-                provider_name="chiasegpu",
+                provider_name=self._infer_provider_name("default", self._marketplace_base_url),
                 api_key=self._marketplace_api_key,
                 base_url=self._marketplace_base_url,
                 timeout_sec=self._marketplace_timeout_sec,
@@ -82,7 +83,10 @@ class AIClient:
             ),
             "judge": ProviderConfig(
                 slot="judge",
-                provider_name="chiasegpu-judge",
+                provider_name=self._infer_provider_name(
+                    "judge",
+                    settings.phase8_judge_api_base_url or self._marketplace_base_url,
+                ),
                 api_key=settings.phase8_judge_api_key.strip() or self._marketplace_api_key,
                 base_url=(settings.phase8_judge_api_base_url or self._marketplace_base_url).rstrip("/"),
                 timeout_sec=max(1.0, float(settings.phase8_judge_api_timeout_sec or self._marketplace_timeout_sec)),
@@ -97,7 +101,10 @@ class AIClient:
             ),
             "ocr": ProviderConfig(
                 slot="ocr",
-                provider_name="chiasegpu-ocr",
+                provider_name=self._infer_provider_name(
+                    "ocr",
+                    settings.phase8_ocr_api_base_url or settings.phase8_judge_api_base_url or self._marketplace_base_url,
+                ),
                 api_key=settings.phase8_ocr_api_key.strip() or settings.phase8_judge_api_key.strip() or self._marketplace_api_key,
                 base_url=(settings.phase8_ocr_api_base_url or settings.phase8_judge_api_base_url or self._marketplace_base_url).rstrip("/"),
                 timeout_sec=max(1.0, float(settings.phase8_ocr_api_timeout_sec or settings.phase8_judge_api_timeout_sec or self._marketplace_timeout_sec)),
@@ -116,6 +123,18 @@ class AIClient:
             if self._anthropic_api_key and anthropic is not None
             else None
         )
+
+    def _infer_provider_name(self, slot: str, base_url: str) -> str:
+        host = urlparse((base_url or "").strip()).netloc.lower()
+        if "api.x.ai" in host:
+            base_name = "xai"
+        elif "chiasegpu" in host:
+            base_name = "chiasegpu"
+        elif host:
+            base_name = "compatible"
+        else:
+            base_name = "unconfigured"
+        return base_name if slot == "default" else f"{base_name}-{slot}"
 
     async def call(
         self,
@@ -299,7 +318,31 @@ class AIClient:
         user_content: str | list[dict[str, Any]] | None,
     ) -> str:
         if stream:
-            raise ValueError("Streaming is not supported for marketplace requests")
+            raise ValueError("Streaming is not supported for provider requests")
+        if self._uses_responses_api(provider_config.base_url):
+            payload = {
+                "model": model,
+                "store": False,
+                "input": [
+                    {
+                        "role": "system",
+                        "content": [{"type": "input_text", "text": system_prompt}],
+                    },
+                    {
+                        "role": "user",
+                        "content": self._build_responses_content(
+                            user_input=user_input,
+                            user_content=user_content,
+                        ),
+                    },
+                ],
+            }
+            raw_response = await asyncio.to_thread(self._post_marketplace_completion, provider_config, payload)
+            try:
+                parsed = json.loads(raw_response)
+            except json.JSONDecodeError as exc:
+                raise ProviderEnvelopeError("Provider response was not valid JSON") from exc
+            return self._extract_responses_output_text(parsed)
         payload = {
             "model": model,
             "messages": [
@@ -312,13 +355,13 @@ class AIClient:
         try:
             parsed = json.loads(raw_response)
         except json.JSONDecodeError as exc:
-            raise ProviderEnvelopeError("Marketplace response was not valid JSON") from exc
+            raise ProviderEnvelopeError("Provider response was not valid JSON") from exc
         choices = parsed.get("choices")
         if not isinstance(choices, list) or not choices:
-            raise ProviderEnvelopeError("Marketplace response did not include choices")
+            raise ProviderEnvelopeError("Provider response did not include choices")
         message = choices[0].get("message") if isinstance(choices[0], dict) else None
         if not isinstance(message, dict):
-            raise ProviderEnvelopeError("Marketplace response did not include a message")
+            raise ProviderEnvelopeError("Provider response did not include a message")
         content = message.get("content")
         if isinstance(content, str):
             return content
@@ -329,17 +372,18 @@ class AIClient:
                     parts.append(str(item.get("text") or ""))
             if parts:
                 return "\n".join(parts)
-        raise ProviderEnvelopeError("Marketplace response did not include text content")
+        raise ProviderEnvelopeError("Provider response did not include text content")
 
     def _post_marketplace_completion(self, provider_config: ProviderConfig, payload: dict[str, Any]) -> str:
+        endpoint = "/responses" if self._uses_responses_api(provider_config.base_url) else "/chat/completions"
         request = urllib_request.Request(
-            url=f"{provider_config.base_url}/chat/completions",
+            url=f"{provider_config.base_url}{endpoint}",
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "Authorization": f"Bearer {provider_config.api_key}",
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "User-Agent": "social-listening-v3/phase8",
+                "User-Agent": "social-listening-v3/provider-client",
             },
             method="POST",
         )
@@ -354,22 +398,86 @@ class AIClient:
                 error_body = ""
             if exc.code == 429:
                 raise ProviderRateLimitError(
-                    "Marketplace rate limited",
+                    "Provider rate limited",
                     retry_after_sec=self._parse_retry_after_seconds(exc.headers.get("Retry-After")),
                 ) from exc
             if exc.code >= 500:
-                raise ProviderServerError(f"Marketplace server error: {exc.code}") from exc
+                raise ProviderServerError(f"Provider server error: {exc.code}") from exc
             if exc.code == 403 and error_body:
-                raise ProviderTransportError(f"Marketplace forbidden: {error_body[:200]}") from exc
-            raise ProviderTransportError(f"Marketplace request failed: HTTP {exc.code}") from exc
+                raise ProviderTransportError(f"Provider forbidden: {error_body[:200]}") from exc
+            raise ProviderTransportError(f"Provider request failed: HTTP {exc.code}") from exc
         except urllib_error.URLError as exc:
             if self._is_timeout_error(exc.reason):
-                raise ProviderTimeoutError("Marketplace request timed out") from exc
-            raise ProviderTransportError("Marketplace transport failure") from exc
+                raise ProviderTimeoutError("Provider request timed out") from exc
+            raise ProviderTransportError("Provider transport failure") from exc
         except socket.timeout as exc:
-            raise ProviderTimeoutError("Marketplace request timed out") from exc
+            raise ProviderTimeoutError("Provider request timed out") from exc
         except TimeoutError as exc:
-            raise ProviderTimeoutError("Marketplace request timed out") from exc
+            raise ProviderTimeoutError("Provider request timed out") from exc
+
+    def _uses_responses_api(self, base_url: str) -> bool:
+        host = urlparse((base_url or "").strip()).netloc.lower()
+        return "api.x.ai" in host
+
+    def _build_responses_content(
+        self,
+        *,
+        user_input: str,
+        user_content: str | list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]]:
+        if user_content is None:
+            return [{"type": "input_text", "text": user_input}]
+        if isinstance(user_content, str):
+            return [{"type": "input_text", "text": user_content}]
+
+        normalized: list[dict[str, Any]] = []
+        for item in user_content:
+            if not isinstance(item, dict):
+                normalized.append({"type": "input_text", "text": str(item)})
+                continue
+            item_type = str(item.get("type") or "").strip().lower()
+            if item_type == "text":
+                normalized.append({"type": "input_text", "text": str(item.get("text") or "")})
+                continue
+            if item_type == "input_text":
+                normalized.append({"type": "input_text", "text": str(item.get("text") or "")})
+                continue
+            if item_type in {"image_url", "input_image"}:
+                image_url_payload = item.get("image_url")
+                if isinstance(image_url_payload, dict):
+                    image_url = str(image_url_payload.get("url") or "").strip()
+                else:
+                    image_url = str(image_url_payload or item.get("url") or "").strip()
+                if image_url:
+                    normalized.append({"type": "input_image", "image_url": image_url})
+                continue
+            normalized.append({"type": "input_text", "text": json.dumps(item, ensure_ascii=False)})
+
+        return normalized or [{"type": "input_text", "text": user_input}]
+
+    def _extract_responses_output_text(self, parsed: dict[str, Any]) -> str:
+        output_text = parsed.get("output_text")
+        if isinstance(output_text, str) and output_text.strip():
+            return output_text
+
+        parts: list[str] = []
+        output = parsed.get("output")
+        if isinstance(output, list):
+            for item in output:
+                if not isinstance(item, dict):
+                    continue
+                content = item.get("content")
+                if isinstance(content, list):
+                    for block in content:
+                        if not isinstance(block, dict):
+                            continue
+                        if block.get("type") in {"output_text", "text"} and isinstance(block.get("text"), str):
+                            parts.append(block["text"])
+                elif isinstance(content, str):
+                    parts.append(content)
+        if parts:
+            return "\n".join(part for part in parts if part).strip()
+        raise ProviderEnvelopeError("Provider response did not include text content")
 
     def _get_provider_config(self, provider_slot: str) -> ProviderConfig:
         return self._provider_configs.get(provider_slot, self._provider_configs["default"])

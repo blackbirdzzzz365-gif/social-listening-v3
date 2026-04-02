@@ -8,7 +8,7 @@ import {
   Text,
   TextInput,
 } from "@mantine/core";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { ActionBar } from "../components/ui/ActionBar";
 import { KeyValueRow } from "../components/ui/KeyValueRow";
 import { PageHeader } from "../components/ui/PageHeader";
@@ -19,6 +19,7 @@ import { apiUrl, fetchJson } from "../lib/api";
 type StepRun = {
   step_run_id: string;
   step_id: string;
+  step_order: number;
   action_type: string;
   status: string;
   started_at?: string | null;
@@ -87,6 +88,14 @@ type MonitorPageProps = {
   initialRunId?: string;
   onRunSelected?: (runId: string) => void;
 };
+
+function LogFrame({ children, maxHeight = 220 }: { children: ReactNode; maxHeight?: number }) {
+  return (
+    <div className="sl-log-frame" style={{ maxHeight }}>
+      {children}
+    </div>
+  );
+}
 
 export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPageProps) {
   const [runId, setRunId] = useState("");
@@ -393,9 +402,11 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
                     </Code>
                   ) : null}
                   {run.answer_payload.evidence_stats ? (
-                    <Code block className="sl-code-block">
-                      {JSON.stringify(run.answer_payload.evidence_stats, null, 2)}
-                    </Code>
+                    <LogFrame maxHeight={180}>
+                      <Code block className="sl-code-block">
+                        {JSON.stringify(run.answer_payload.evidence_stats, null, 2)}
+                      </Code>
+                    </LogFrame>
                   ) : null}
                   {run.answer_payload.dominant_reject_reasons?.length ? (
                     <Stack gap="xs">
@@ -416,9 +427,11 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
                       <Text fw={600} size="sm">
                         Attempted queries
                       </Text>
-                      <Code block className="sl-code-block">
-                        {JSON.stringify(run.answer_payload.attempted_queries, null, 2)}
-                      </Code>
+                      <LogFrame maxHeight={220}>
+                        <Code block className="sl-code-block">
+                          {JSON.stringify(run.answer_payload.attempted_queries, null, 2)}
+                        </Code>
+                      </LogFrame>
                     </Stack>
                   ) : null}
                   {run.answer_payload.recommended_next_actions?.length ? (
@@ -442,7 +455,10 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
               <Paper key={step.step_run_id} p="sm" radius="md" withBorder>
                 <Stack gap={6}>
                   <Text fw={700} size="sm">
-                    {step.step_id} · {step.action_type}
+                    Step {step.step_order} · {step.action_type}
+                  </Text>
+                  <Text c="dimmed" size="xs">
+                    {step.step_id}
                   </Text>
                   <StatusBadge label={`Step ${step.status}`} status={step.status} />
                   {step.started_at ? <KeyValueRow label="started" value={step.started_at} /> : null}
@@ -452,17 +468,21 @@ export function MonitorPage({ initialRunId = "", onRunSelected }: MonitorPagePro
                     <KeyValueRow label="heartbeat" value={step.checkpoint.heartbeat_at} />
                   ) : null}
                   {step.checkpoint?.progress ? (
-                    <Code block className="sl-code-block">
-                      {JSON.stringify(step.checkpoint.progress, null, 2)}
-                    </Code>
+                    <LogFrame maxHeight={220}>
+                      <Code block className="sl-code-block">
+                        {JSON.stringify(step.checkpoint.progress, null, 2)}
+                      </Code>
+                    </LogFrame>
                   ) : null}
                 </Stack>
               </Paper>
             ))}
             <Paper p="sm" radius="md" withBorder>
-              <Code block className="sl-code-block">
-                {events.join("\n") || "No events yet."}
-              </Code>
+              <LogFrame maxHeight={220}>
+                <Code block className="sl-code-block">
+                  {events.join("\n") || "No events yet."}
+                </Code>
+              </LogFrame>
             </Paper>
           </Stack>
         ) : null}

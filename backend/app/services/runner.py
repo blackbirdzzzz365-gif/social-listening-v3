@@ -74,6 +74,11 @@ class BrowserActionRequiredError(RuntimeError):
         self.failure_stage = failure_stage
 
 
+def _extract_step_order(step_id: str) -> int:
+    match = re.search(r"(\d+)$", step_id)
+    return int(match.group(1)) if match else 10**9
+
+
 class RunnerService:
     def __init__(
         self,
@@ -263,11 +268,13 @@ class RunnerService:
             steps = []
             for step_run in step_runs:
                 step = step_map.get(step_run.step_id)
+                public_step_id = get_public_step_id(step_run.step_id)
                 checkpoint_value = step_run.checkpoint or step_run.checkpoint_json
                 steps.append(
                     {
                         "step_run_id": step_run.step_run_id,
-                        "step_id": get_public_step_id(step_run.step_id),
+                        "step_id": public_step_id,
+                        "step_order": step.step_order if step is not None else _extract_step_order(public_step_id),
                         "action_type": step.action_type if step else "UNKNOWN",
                         "status": step_run.status,
                         "started_at": step_run.started_at,
@@ -279,7 +286,7 @@ class RunnerService:
                         "checkpoint": json.loads(checkpoint_value) if checkpoint_value else None,
                     }
                 )
-            steps.sort(key=lambda item: (item["checkpoint"] or {}).get("step_id", item["step_id"]))
+            steps.sort(key=lambda item: (item["step_order"], item["started_at"] or "", item["step_run_id"]))
             return {
                 "run_id": run.run_id,
                 "plan_id": run.plan_id,

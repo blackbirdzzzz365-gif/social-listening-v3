@@ -102,6 +102,18 @@ textarea {
 .sl-code-block {
   white-space: pre-wrap;
   word-break: break-word;
+  margin: 0;
+}
+
+.sl-log-frame {
+  overflow: auto;
+  max-width: 100%;
+  border-radius: 0.75rem;
+  overscroll-behavior: contain;
+}
+
+.sl-log-frame .sl-code-block {
+  min-width: 100%;
 }
 
 @media (min-width: 48em) {
